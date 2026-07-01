@@ -116,7 +116,11 @@ class Pipeline:
                     return await self._finish(ctx, hooks)
 
             # ── EGO route: execute + correction loop ──────────────────
-            if ctx.id_result and ctx.id_result.triad_route == "EGO":
+            # A confirmed action (gate-B completion) MUST run through the EGO to be executed,
+            # even when the user's bare "sim" would otherwise route to the SUPEREGO — otherwise
+            # the approved call is never dispatched (and its side effects never fire).
+            force_ego = bool(ctx.metadata.get("ego_confirmed") and ctx.metadata.get("ego_confirmed_calls"))
+            if force_ego or (ctx.id_result and ctx.id_result.triad_route == "EGO"):
                 judge = await self._run_ego_loop(ctx, cfg, dispatcher, hooks)
                 await self._fire(hooks.after_ego, ctx)
                 if judge is not None and not judge.approved:
