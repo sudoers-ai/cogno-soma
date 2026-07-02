@@ -115,6 +115,30 @@ async def test_correction_loop_recovers_and_voices(stub_embedder, stub_backend, 
     assert ctx.superego_result.response == "final reply"
 
 
+async def test_correction_rerun_does_not_replay_confirmed_calls(stub_embedder, stub_backend,
+                                                                dispatcher):
+    """Gate-B replay is once-only: the confirmed calls execute on attempt 1 (their outcome is
+    in the trace); a judge-rejected correction re-run must NOT replay them — a rejected-but-
+    successful call would execute twice (double booking)."""
+    seen_calls_per_attempt = []
+
+    class RecordingEgo(FakeEgo):
+        async def process(self, ctx, backend, dispatcher, *, system_prompt):
+            seen_calls_per_attempt.append(ctx.metadata.get("ego_confirmed_calls"))
+            return await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO"), ego=RecordingEgo(),
+                     superego=FakeSuperego(approve_after=2))
+    ctx = _ctx()
+    ctx.metadata.update({"ego_confirmed": True,
+                         "ego_confirmed_calls": [{"tool": "book_appointment", "arguments": {}}]})
+    ctx = await pipe.run_turn(ctx, _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
+    assert len(seen_calls_per_attempt) == 2
+    assert seen_calls_per_attempt[0]                    # attempt 1: replay list present
+    assert not seen_calls_per_attempt[1]                # attempt 2: consumed — never replayed
+    assert ctx.superego_result.response == "final reply"   # recovered and voiced
+
+
 async def test_correction_feeds_critique_into_metadata(stub_embedder, stub_backend, dispatcher):
     ego = FakeEgo()
     sup = FakeSuperego(approve_after=2, critique="missing the amount")

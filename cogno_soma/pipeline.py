@@ -160,6 +160,10 @@ class Pipeline:
                 ctx.retry_metrics.append(ctx.ego_result.metrics)
             await self._fire(hooks.on_rollback, ctx)
             ctx.metadata["ego_correction"] = {"reason": judge.critique, "attempt": attempt + 1}
+            # Gate-B replay is once-only: the confirmed calls were already executed on this
+            # attempt (their outcome is in the trace) — a correction re-run must NOT replay
+            # them, or a rejected-but-successful call would execute twice (double booking).
+            ctx.metadata.pop("ego_confirmed_calls", None)
             attempt += 1
         return judge
 
