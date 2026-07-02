@@ -44,6 +44,19 @@ async def test_non_task_path_voices_response(stub_embedder, stub_backend, dispat
     assert ego.invocations == 0
 
 
+async def test_confirmed_calls_force_the_ego_route(stub_embedder, stub_backend, dispatcher):
+    """Gate-B completion: a bare "sim" routes to SUPEREGO, but a pending confirmed call MUST
+    still run the EGO so the approved action is executed (else it is silently dropped)."""
+    ego = FakeEgo()
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO"), ego=ego,
+                     superego=FakeSuperego(approve=True))
+    ctx = _ctx()
+    ctx.metadata.update({"ego_confirmed": True,
+                         "ego_confirmed_calls": [{"tool": "book_appointment", "arguments": {}}]})
+    ctx = await pipe.run_turn(ctx, _cfg(stub_backend), dispatcher=dispatcher)
+    assert ego.invocations == 1                       # EGO ran despite the SUPEREGO route
+
+
 async def test_ego_route_runs_loop_then_voices(stub_embedder, stub_backend, dispatcher):
     ego = FakeEgo()
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego,
