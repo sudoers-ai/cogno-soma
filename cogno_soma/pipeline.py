@@ -150,7 +150,10 @@ class Pipeline:
         attempt = 1
         judge = None
         while True:
-            ctx = await self._ego.process(ctx, cfg.ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
+            # Complexity escalation: after the ID, a hard task can bump the EGO onto a stronger
+            # model for this turn (the host's ladder policy); None keeps the configured backend.
+            ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
+            ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
             judge = await self._superego.evaluate(
                 ctx, cfg.judge_backend or cfg.gen_backend, limits_prompt=cfg.limits_prompt)
             ctx.retry_metrics.append(judge.metrics)  # the judge is never the "main" superego (voice is)

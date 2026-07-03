@@ -21,11 +21,19 @@ strong judge, a mid-tier voicer — instead of one shared JSON backend. Unset �
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from cogno_synapse import LLMBackend
 
 from cogno_soma.hooks import Hooks
+
+if TYPE_CHECKING:
+    from cogno_anima.types import PipelineContext
+
+# Complexity-based escalation: given the running turn (its ``id_result.complexity``) and a stage
+# name, return a stronger backend to run that stage on, or None to keep the configured one. The
+# host owns the policy (the model ladder + the plan gate); soma just consults it after the ID.
+EscalateFn = Callable[["PipelineContext", str], Optional[LLMBackend]]
 
 
 @dataclass
@@ -44,3 +52,6 @@ class TurnConfig:
     ner_backend: Optional[LLMBackend] = None      # None → gen_backend
     scope_backend: Optional[LLMBackend] = None    # None → gen_backend
     judge_backend: Optional[LLMBackend] = None    # None → gen_backend
+    # Host escalation policy consulted AFTER the ID computes complexity: a hard task can bump the
+    # EGO onto a stronger model for this turn. None → no escalation (the configured backends run).
+    escalate: Optional[EscalateFn] = None
