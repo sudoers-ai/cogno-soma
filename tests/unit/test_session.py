@@ -102,6 +102,37 @@ async def test_memories_injected_as_ego_context(stub_embedder, stub_backend):
     assert seen["ego_context"] == "[MEMORIES]\nbalance is 100\ncurrency BRL"
 
 
+async def test_transcript_feeds_conversation_history(stub_embedder, stub_backend):
+    # the 2nd turn must see the prior exchange (user text + the voiced assistant reply) so a
+    # follow-up like a bare name resolves against what was actually said.
+    pipe = _pipe(stub_embedder)
+    seen: dict = {}
+    orig = pipe._id.process
+
+    async def spy(ctx, embedder):
+        seen["ego_context"] = ctx.metadata.get("ego_context")
+        return await orig(ctx, embedder)
+
+    pipe._id.process = spy  # type: ignore[method-assign]
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("quero marcar com o cardiologista")
+    await sess.run("Vinicius Vale")
+    hist = seen["ego_context"]
+    assert "[CONVERSATION HISTORY]" in hist
+    assert "User: quero marcar com o cardiologista" in hist
+    assert "Assistant: final reply" in hist            # the voiced reply, not just the user text
+    # and the transcript is in the serializable state (survives a worker handoff)
+    assert sess.state["transcript"][-1] == ["Vinicius Vale", "final reply"]
+
+
+async def test_transcript_window_is_bounded(stub_embedder, stub_backend):
+    sess = SessionRunner(_pipe(stub_embedder), _cfg(stub_backend),
+                         dispatcher=RecordingDispatcher(), max_history=2)
+    for i in range(5):
+        await sess.run(f"turn {i}")
+    assert len(sess.state["transcript"]) == 2           # only the last 2 exchanges kept
+
+
 async def test_state_round_trip_resumes_session(stub_embedder, stub_backend):
     sess = SessionRunner(_pipe(stub_embedder, goal="g1"), _cfg(stub_backend),
                          dispatcher=RecordingDispatcher())

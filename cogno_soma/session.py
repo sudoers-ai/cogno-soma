@@ -52,6 +52,7 @@ class SessionRunner:
         persona_id: Optional[str] = None,
         mcp_module: Optional[str] = None,
         force_language: Optional[str] = None,
+        max_history: int = 6,
         state: Optional[dict] = None,
     ) -> None:
         self._pipeline = pipeline
@@ -61,10 +62,16 @@ class SessionRunner:
         self._persona_id = persona_id
         self._mcp_module = mcp_module
         self._force_language = force_language
+        # How many recent (user, assistant) exchanges to feed back as conversation context.
+        self._max_history = max_history
 
         state = state or {}
         self._carry: dict = dict(state.get("carry", {}))
         self._history: list[str] = list(state.get("history", []))
+        # The rolling transcript (original user text + the voiced assistant reply) — what makes a
+        # follow-up like "the 9am one" / "Vinicius Vale" legible. Persisted so it survives workers.
+        self._transcript: list[tuple[str, str]] = [
+            (u, a) for u, a in state.get("transcript", [])]
         self._turn: int = int(state.get("turn_number", 0))
 
     async def run(
@@ -87,14 +94,26 @@ class SessionRunner:
             ctx.metadata["active_mcp_module"] = self._mcp_module
         if self._history:
             ctx.metadata["last_rewritten"] = self._history[-1]
+        # Conversation context: the recent transcript (so a follow-up resolves against what was
+        # actually said — "Vinicius Vale" answers the assistant's "com quem?") + host memories.
+        blocks: list[str] = []
+        if self._transcript:
+            lines: list[str] = []
+            for user_turn, assistant_turn in self._transcript[-self._max_history:]:
+                lines.append(f"User: {user_turn}")
+                if assistant_turn:
+                    lines.append(f"Assistant: {assistant_turn}")
+            blocks.append("[CONVERSATION HISTORY]\n" + "\n".join(lines))
         if memories:
-            ctx.metadata["ego_context"] = "[MEMORIES]\n" + "\n".join(memories)
+            blocks.append("[MEMORIES]\n" + "\n".join(memories))
+        if blocks:
+            ctx.metadata["ego_context"] = "\n\n".join(blocks)
         if metadata:
             ctx.metadata.update(metadata)
 
         disp = self._resolve_dispatcher(dispatcher)
         ctx = await self._pipeline.run_turn(ctx, self._config, dispatcher=disp)
-        self._thread_forward(ctx)
+        self._thread_forward(ctx, user_input)
         return ctx
 
     def _resolve_dispatcher(self, override: Optional[ToolDispatcher]) -> ToolDispatcher:
@@ -107,7 +126,7 @@ class SessionRunner:
                 "dispatcher_factory on the SessionRunner")
         return disp
 
-    def _thread_forward(self, ctx: PipelineContext) -> None:
+    def _thread_forward(self, ctx: PipelineContext, user_input: str) -> None:
         carry: dict = {"id_state": ctx.metadata.get("id_state", {})}
         if ctx.intent and ctx.intent.goal:
             carry["last_goal"] = ctx.intent.goal
@@ -116,6 +135,11 @@ class SessionRunner:
         self._carry = carry
         if ctx.noumeno:
             self._history.append(ctx.noumeno.rewritten)
+        # Record the exchange (user + the voiced reply) for the next turn's conversation context,
+        # keeping only the most recent window so state stays bounded.
+        reply = ctx.superego_result.response if ctx.superego_result else ""
+        self._transcript.append((user_input, reply))
+        self._transcript = self._transcript[-self._max_history:]
 
     @property
     def state(self) -> dict:
@@ -123,6 +147,7 @@ class SessionRunner:
         return {
             "carry": dict(self._carry),
             "history": list(self._history),
+            "transcript": [list(pair) for pair in self._transcript],
             "turn_number": self._turn,
         }
 
