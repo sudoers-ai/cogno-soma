@@ -202,28 +202,40 @@ async def test_tokens_counted_on_handoff(stub_embedder, stub_backend, dispatcher
 
 # ── per-stage model routing: each stage runs on its own backend ─────────────────────────
 class _RecNoumeno(FakeNoumeno):
-    def __init__(self, log): super().__init__(); self.log = log
+    def __init__(self, log):
+        super().__init__()
+        self.log = log
+
     async def process(self, ctx, backend):
         self.log["noumeno"] = backend
         return await super().process(ctx, backend)
 
 
 class _RecNER(FakeNER):
-    def __init__(self, log): super().__init__(); self.log = log
+    def __init__(self, log):
+        super().__init__()
+        self.log = log
+
     async def process(self, ctx, backend):
         self.log["ner"] = backend
         return await super().process(ctx, backend)
 
 
 class _RecEgo(FakeEgo):
-    def __init__(self, log): super().__init__(); self.log = log
+    def __init__(self, log):
+        super().__init__()
+        self.log = log
+
     async def process(self, ctx, backend, dispatcher, *, system_prompt):
         self.log["ego"] = backend
         return await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
 
 
 class _RecSuperego(FakeSuperego):
-    def __init__(self, log): super().__init__(approve=True); self.log = log
+    def __init__(self, log):
+        super().__init__(approve=True)
+        self.log = log
+
     async def check_input_scope(self, ctx, backend, *, scope_prompt):
         self.log["scope"] = backend
         return await super().check_input_scope(ctx, backend, scope_prompt=scope_prompt)
