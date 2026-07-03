@@ -9,6 +9,7 @@ from tests.conftest import (
     FakeNER,
     FakeNoumeno,
     FakeSuperego,
+    StubBackend,
 )
 
 
@@ -197,3 +198,70 @@ async def test_tokens_counted_on_handoff(stub_embedder, stub_backend, dispatcher
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
     assert ctx.needs_handoff is True
     assert ctx.total_llm_tokens > 0            # the EGO + judge attempts are billed
+
+
+# ── per-stage model routing: each stage runs on its own backend ─────────────────────────
+class _RecNoumeno(FakeNoumeno):
+    def __init__(self, log): super().__init__(); self.log = log
+    async def process(self, ctx, backend):
+        self.log["noumeno"] = backend
+        return await super().process(ctx, backend)
+
+
+class _RecNER(FakeNER):
+    def __init__(self, log): super().__init__(); self.log = log
+    async def process(self, ctx, backend):
+        self.log["ner"] = backend
+        return await super().process(ctx, backend)
+
+
+class _RecEgo(FakeEgo):
+    def __init__(self, log): super().__init__(); self.log = log
+    async def process(self, ctx, backend, dispatcher, *, system_prompt):
+        self.log["ego"] = backend
+        return await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+
+
+class _RecSuperego(FakeSuperego):
+    def __init__(self, log): super().__init__(approve=True); self.log = log
+    async def check_input_scope(self, ctx, backend, *, scope_prompt):
+        self.log["scope"] = backend
+        return await super().check_input_scope(ctx, backend, scope_prompt=scope_prompt)
+    async def evaluate(self, ctx, backend, *, limits_prompt):
+        self.log["judge"] = backend
+        return await super().evaluate(ctx, backend, limits_prompt=limits_prompt)
+    async def voice(self, ctx, backend, *, voice_prompt):
+        self.log["voice"] = backend
+        return await super().voice(ctx, backend, voice_prompt=voice_prompt)
+
+
+async def test_per_stage_backends_route_independently(stub_embedder, dispatcher):
+    """Each JSON stage runs on its OWN backend when pinned (NOUMENO/NER/scope/judge distinct)."""
+    log: dict = {}
+    b = {k: StubBackend() for k in ("noumeno", "ner", "ego", "scope", "judge", "voice", "gen")}
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     noumeno=_RecNoumeno(log), ner=_RecNER(log), ego=_RecEgo(log),
+                     superego=_RecSuperego(log))
+    cfg = TurnConfig(gen_backend=b["gen"], ego_backend=b["ego"], ego_prompt="exec",
+                     scope_prompt="guard", noumeno_backend=b["noumeno"], ner_backend=b["ner"],
+                     scope_backend=b["scope"], judge_backend=b["judge"], voice_backend=b["voice"])
+    await pipe.run_turn(_ctx(), cfg, dispatcher=dispatcher)
+    assert log["noumeno"] is b["noumeno"]
+    assert log["ner"] is b["ner"]
+    assert log["scope"] is b["scope"]
+    assert log["judge"] is b["judge"]
+    assert log["voice"] is b["voice"]
+    assert log["ego"] is b["ego"]
+
+
+async def test_unpinned_json_stage_falls_back_to_gen(stub_embedder, dispatcher):
+    """A JSON stage left unset uses gen_backend (backward compatible); a pinned one overrides."""
+    log: dict = {}
+    gen, ner_b = StubBackend(), StubBackend()
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO"),
+                     noumeno=_RecNoumeno(log), ner=_RecNER(log), superego=_RecSuperego(log))
+    cfg = TurnConfig(gen_backend=gen, ego_backend=StubBackend(), ego_prompt="exec",
+                     ner_backend=ner_b)           # only NER pinned; NOUMENO unset → gen
+    await pipe.run_turn(_ctx(), cfg, dispatcher=dispatcher)
+    assert log["noumeno"] is gen                  # fell back to gen_backend
+    assert log["ner"] is ner_b                    # its own model
