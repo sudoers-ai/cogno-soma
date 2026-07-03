@@ -266,6 +266,21 @@ async def test_per_stage_backends_route_independently(stub_embedder, dispatcher)
     assert log["ego"] is b["ego"]
 
 
+async def test_escalate_bumps_the_ego_backend(stub_embedder, stub_backend, dispatcher):
+    """The pipeline consults ``cfg.escalate`` (the host's complexity ladder) for the EGO backend."""
+    log: dict = {}
+    strong = StubBackend()
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_RecEgo(log))
+    # escalate returns a stronger backend for the EGO → the loop runs on it
+    cfg = _cfg(stub_backend, escalate=lambda ctx, stage: strong if stage == "ego" else None)
+    await pipe.run_turn(_ctx(), cfg, dispatcher=dispatcher)
+    assert log["ego"] is strong
+    # None (easy turn / not the ego stage) keeps the configured backend
+    cfg2 = _cfg(stub_backend, escalate=lambda ctx, stage: None)
+    await pipe.run_turn(_ctx(), cfg2, dispatcher=dispatcher)
+    assert log["ego"] is stub_backend
+
+
 async def test_unpinned_json_stage_falls_back_to_gen(stub_embedder, dispatcher):
     """A JSON stage left unset uses gen_backend (backward compatible); a pinned one overrides."""
     log: dict = {}
