@@ -11,6 +11,11 @@ the resolved ``system``/``scope``/``limits``/``voice`` text in — soma never de
 on a persona store. ``gen_backend`` drives the JSON stages (NOUMENO/NER/scope/judge);
 ``ego_backend`` drives the EGO executor (native FC or text-fallback); ``voice_backend``
 defaults to ``ego_backend`` but may differ (e.g. a smaller voicer).
+
+**Per-stage model routing.** Each JSON stage can override ``gen_backend`` individually via
+``noumeno_backend`` / ``ner_backend`` / ``scope_backend`` / ``judge_backend`` (all default None →
+``gen_backend``). This lets a host give every step its own model — e.g. a cheap NOUMENO/NER, a
+strong judge, a mid-tier voicer — instead of one shared JSON backend. Unset → identical to before.
 """
 
 from __future__ import annotations
@@ -34,3 +39,8 @@ class TurnConfig:
     voice_backend: Optional[LLMBackend] = None  # None → reuse ego_backend
     max_corrections: int = 2          # EGO⇄SUPEREGO retry budget
     hooks: Optional[Hooks] = None     # None → no interception
+    # Per-stage overrides for the JSON stages (None → gen_backend). Let each step run its own model.
+    noumeno_backend: Optional[LLMBackend] = None  # None → gen_backend
+    ner_backend: Optional[LLMBackend] = None      # None → gen_backend
+    scope_backend: Optional[LLMBackend] = None    # None → gen_backend
+    judge_backend: Optional[LLMBackend] = None    # None → gen_backend

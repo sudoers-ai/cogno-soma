@@ -89,9 +89,9 @@ class Pipeline:
             await self._fire(hooks.before_turn, ctx)
 
             # ── perception + routing ──────────────────────────────────
-            ctx = await self._noumeno.process(ctx, cfg.gen_backend)
+            ctx = await self._noumeno.process(ctx, cfg.noumeno_backend or cfg.gen_backend)
             await self._fire(hooks.after_noumeno, ctx)
-            ctx = await self._ner.process(ctx, cfg.gen_backend)
+            ctx = await self._ner.process(ctx, cfg.ner_backend or cfg.gen_backend)
             await self._fire(hooks.after_ner, ctx)
             ctx = await self._id.process(ctx, self._embedder)
             await self._fire(hooks.after_id, ctx)
@@ -106,7 +106,7 @@ class Pipeline:
             # ── early scope guard (optional, cheap ALLOW/BLOCK) ───────
             if cfg.scope_prompt:
                 scope = await self._superego.check_input_scope(
-                    ctx, cfg.gen_backend, scope_prompt=cfg.scope_prompt)
+                    ctx, cfg.scope_backend or cfg.gen_backend, scope_prompt=cfg.scope_prompt)
                 ctx.retry_metrics.append(scope.metrics)
                 if scope.blocked:
                     ctx.superego_result = SuperegoResult(
@@ -151,7 +151,8 @@ class Pipeline:
         judge = None
         while True:
             ctx = await self._ego.process(ctx, cfg.ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
-            judge = await self._superego.evaluate(ctx, cfg.gen_backend, limits_prompt=cfg.limits_prompt)
+            judge = await self._superego.evaluate(
+                ctx, cfg.judge_backend or cfg.gen_backend, limits_prompt=cfg.limits_prompt)
             ctx.retry_metrics.append(judge.metrics)  # the judge is never the "main" superego (voice is)
             if judge.approved or attempt >= cfg.max_corrections:
                 break
