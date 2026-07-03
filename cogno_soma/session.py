@@ -103,7 +103,12 @@ class SessionRunner:
                 lines.append(f"User: {user_turn}")
                 if assistant_turn:
                     lines.append(f"Assistant: {assistant_turn}")
-            blocks.append("[CONVERSATION HISTORY]\n" + "\n".join(lines))
+            transcript = "\n".join(lines)
+            blocks.append("[CONVERSATION HISTORY]\n" + transcript)
+            # Also expose the raw transcript to the perception stages (NOUMENO/NER read this, not
+            # ego_context) so a bare follow-up ("com o Vinicius Vale") resolves against the
+            # assistant's last question instead of being classified UNKNOWN and scope-blocked.
+            ctx.metadata["conversation_history"] = transcript
         if memories:
             blocks.append("[MEMORIES]\n" + "\n".join(memories))
         if blocks:
