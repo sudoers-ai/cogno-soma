@@ -35,6 +35,20 @@ def _ctx(text="hi"):
     return PipelineContext(user_input=text)
 
 
+class _SideEffectEgo(FakeEgo):
+    """A FakeEgo whose trace records a committed mutating call (has_side_effects=True)."""
+
+    async def process(self, ctx, backend, dispatcher, *, system_prompt):
+        from cogno_anima.types import EgoResult, EgoStep, ToolExecution
+        ctx = await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+        ctx.ego_result = EgoResult(
+            steps=[EgoStep(index=0, path="native",
+                           tool_calls=[ToolExecution(tool="book_appointment", ok=True,
+                                                     side_effect=True)])],
+            metrics=ctx.ego_result.metrics)
+        return ctx
+
+
 async def test_non_task_path_voices_response(stub_embedder, stub_backend, dispatcher):
     """SUPEREGO route (no EGO): goes straight to voice, never runs the EGO."""
     ego = FakeEgo()
@@ -95,12 +109,24 @@ async def test_scope_guard_allows_then_continues(stub_embedder, stub_backend, di
 
 
 async def test_correction_loop_retries_until_budget(stub_embedder, stub_backend, dispatcher):
-    """Judge rejects every attempt → loop runs max_corrections times → handoff."""
-    ego = FakeEgo()
+    """Judge rejects every attempt → loop runs max_corrections times. The EGO only READ (no
+    side effect) so the turn ends in needs_clarification (voiced), not a dead-end handoff."""
+    ego = FakeEgo()                         # EgoResult has no steps → has_side_effects is False
     sup = FakeSuperego(approve=False)
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego, superego=sup)
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
     assert ego.invocations == 3
+    assert ctx.needs_handoff is False
+    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.superego_result.response == "final reply"   # voiced → conversation stays alive
+
+
+async def test_reject_after_side_effect_hands_off(stub_embedder, stub_backend, dispatcher):
+    """Judge rejects AND the EGO already committed a mutating call (side_effect) → hand off.
+    Fail-closed: never voice an unverified action as done."""
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_SideEffectEgo(),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
     assert ctx.needs_handoff is True
     assert ctx.stop_reason == "human_handoff"
 
@@ -194,7 +220,8 @@ async def test_token_accounting_loses_nothing(stub_embedder, stub_backend, dispa
 
 async def test_tokens_counted_on_handoff(stub_embedder, stub_backend, dispatcher):
     """Even when the turn ends in handoff, the spent tokens are still accounted."""
-    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), superego=FakeSuperego(approve=False))
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_SideEffectEgo(),
+                     superego=FakeSuperego(approve=False))
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
     assert ctx.needs_handoff is True
     assert ctx.total_llm_tokens > 0            # the EGO + judge attempts are billed
