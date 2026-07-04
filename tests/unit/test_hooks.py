@@ -103,12 +103,39 @@ async def test_on_rollback_fires_per_retry(stub_embedder, stub_backend, dispatch
     assert rolls == [1, 1, 99]  # two rollbacks (before each retry), then a commit
 
 
+class _SideEffectEgo(FakeEgo):
+    """A FakeEgo whose trace records a committed mutating call (has_side_effects=True), so a
+    judge rejection ends in a handoff (not the read-only needs_clarification path)."""
+
+    async def process(self, ctx, backend, dispatcher, *, system_prompt):
+        from cogno_anima.types import EgoResult, EgoStep, ToolExecution
+        ctx = await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+        ctx.ego_result = EgoResult(
+            steps=[EgoStep(index=0, path="native",
+                           tool_calls=[ToolExecution(tool="book_appointment", ok=True,
+                                                     side_effect=True)])],
+            metrics=ctx.ego_result.metrics)
+        return ctx
+
+
 async def test_no_commit_on_handoff(stub_embedder, stub_backend, dispatcher):
+    committed: list[int] = []
+    hooks = Hooks(on_commit=lambda c: committed.append(1))
+    pipe = _pipe(stub_embedder, [], route="EGO", ego=_SideEffectEgo(),
+                 superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, hooks, max_corrections=2), dispatcher=dispatcher)
+    assert ctx.needs_handoff is True
+    assert committed == []  # never commit an unapproved execution
+
+
+async def test_no_commit_on_clarification(stub_embedder, stub_backend, dispatcher):
+    """A read-only rejection (no side effect) ends in needs_clarification — still no commit."""
     committed: list[int] = []
     hooks = Hooks(on_commit=lambda c: committed.append(1))
     pipe = _pipe(stub_embedder, [], route="EGO", superego=FakeSuperego(approve=False))
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, hooks, max_corrections=2), dispatcher=dispatcher)
-    assert ctx.needs_handoff is True
+    assert ctx.needs_handoff is False
+    assert ctx.stop_reason == "needs_clarification"
     assert committed == []  # never commit an unapproved execution
 
 

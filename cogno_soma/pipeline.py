@@ -124,11 +124,26 @@ class Pipeline:
                 judge = await self._run_ego_loop(ctx, cfg, dispatcher, hooks)
                 await self._fire(hooks.after_ego, ctx)
                 if judge is not None and not judge.approved:
-                    ctx.needs_handoff = True
-                    ctx.stop_reason = "human_handoff"
-                    logger.debug("turn_handoff stop_reason=human_handoff")
-                    return await self._finish(ctx, hooks)
-                await self._fire(hooks.on_commit, ctx)
+                    ego = ctx.ego_result
+                    if ego is not None and not ego.has_side_effects:
+                        # The judge rejected, but the EGO only READ (no mutating tool was
+                        # dispatched — nothing was committed to misreport). Rather than dead-end
+                        # in a human handoff, keep the conversation alive: signal
+                        # needs_clarification and fall through to voice() below, which grounds a
+                        # continuation in the read-only trace (e.g. "I found your appointment —
+                        # change it to 11:00?"). Fail-closed is preserved: with a side effect we
+                        # still hand off (never voice an unverified action as done). The HOST owns
+                        # the escalation policy on this signal (force a real handoff after N).
+                        ctx.stop_reason = "needs_clarification"
+                        logger.debug("turn_clarify stop_reason=needs_clarification")
+                        # no on_commit: nothing was committed
+                    else:
+                        ctx.needs_handoff = True
+                        ctx.stop_reason = "human_handoff"
+                        logger.debug("turn_handoff stop_reason=human_handoff")
+                        return await self._finish(ctx, hooks)
+                else:
+                    await self._fire(hooks.on_commit, ctx)
 
             # ── voice (writes the final response; EGO and non-task paths) ──
             ctx.superego_result = await self._superego.voice(
