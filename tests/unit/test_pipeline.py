@@ -49,6 +49,21 @@ class _SideEffectEgo(FakeEgo):
         return ctx
 
 
+class _FailedMutationEgo(FakeEgo):
+    """A FakeEgo whose mutating call FAILED (ok=False) — nothing was committed even though
+    the tool is side-effecting (e.g. the confirmed slot was taken between propose and commit)."""
+
+    async def process(self, ctx, backend, dispatcher, *, system_prompt):
+        from cogno_anima.types import EgoResult, EgoStep, ToolExecution
+        ctx = await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+        ctx.ego_result = EgoResult(
+            steps=[EgoStep(index=0, path="native",
+                           tool_calls=[ToolExecution(tool="book_appointment", ok=False,
+                                                     side_effect=True, error="slot taken")])],
+            metrics=ctx.ego_result.metrics)
+        return ctx
+
+
 async def test_non_task_path_voices_response(stub_embedder, stub_backend, dispatcher):
     """SUPEREGO route (no EGO): goes straight to voice, never runs the EGO."""
     ego = FakeEgo()
@@ -129,6 +144,17 @@ async def test_reject_after_side_effect_hands_off(stub_embedder, stub_backend, d
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
     assert ctx.needs_handoff is True
     assert ctx.stop_reason == "human_handoff"
+
+
+async def test_reject_after_failed_mutation_stays_alive(stub_embedder, stub_backend, dispatcher):
+    """Judge rejects AND the only mutating call FAILED (nothing committed — e.g. the confirmed
+    slot was taken) → needs_clarification, NOT handoff: voice a truthful continuation."""
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_FailedMutationEgo(),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
+    assert ctx.needs_handoff is False
+    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.superego_result.response == "final reply"   # voiced → conversation stays alive
 
 
 async def test_correction_loop_recovers_and_voices(stub_embedder, stub_backend, dispatcher):

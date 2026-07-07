@@ -125,15 +125,21 @@ class Pipeline:
                 await self._fire(hooks.after_ego, ctx)
                 if judge is not None and not judge.approved:
                     ego = ctx.ego_result
-                    if ego is not None and not ego.has_side_effects:
-                        # The judge rejected, but the EGO only READ (no mutating tool was
-                        # dispatched — nothing was committed to misreport). Rather than dead-end
-                        # in a human handoff, keep the conversation alive: signal
-                        # needs_clarification and fall through to voice() below, which grounds a
-                        # continuation in the read-only trace (e.g. "I found your appointment —
-                        # change it to 11:00?"). Fail-closed is preserved: with a side effect we
-                        # still hand off (never voice an unverified action as done). The HOST owns
-                        # the escalation policy on this signal (force a real handoff after N).
+                    # A COMMITTED side effect requires the mutating call to have SUCCEEDED
+                    # (ok) — a mutation that FAILED (e.g. the confirmed slot was taken between
+                    # propose and commit) changed nothing, so it is not a commit to misreport.
+                    committed = ego is not None and any(
+                        t.side_effect and t.ok for t in ego.tools_executed)
+                    if ego is not None and not committed:
+                        # The judge rejected, but nothing was actually COMMITTED — the EGO only
+                        # READ, or every mutating call failed. Rather than dead-end in a human
+                        # handoff, keep the conversation alive: signal needs_clarification and
+                        # fall through to voice() below, which grounds a truthful continuation
+                        # in the trace (e.g. "I found your appointment — change it to 11:00?"
+                        # or "that slot was just taken — want another?"). Fail-closed is
+                        # preserved: a SUCCESSFUL-but-rejected mutation still hands off (never
+                        # voice an unverified commit as done). The HOST owns the escalation
+                        # policy on this signal (force a real handoff after N).
                         ctx.stop_reason = "needs_clarification"
                         logger.debug("turn_clarify stop_reason=needs_clarification")
                         # no on_commit: nothing was committed
