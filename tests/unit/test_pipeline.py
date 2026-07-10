@@ -134,6 +134,8 @@ async def test_correction_loop_retries_until_budget(stub_embedder, stub_backend,
     assert ctx.needs_handoff is False
     assert ctx.stop_reason == "needs_clarification"
     assert ctx.superego_result.response == "final reply"   # voiced → conversation stays alive
+    # the judge's verdict reaches the voice — otherwise it narrates the goal as done
+    assert ctx.metadata["voice_correction"]["reason"] == "fix it"
 
 
 async def test_reject_after_side_effect_hands_off(stub_embedder, stub_backend, dispatcher):
@@ -155,6 +157,7 @@ async def test_reject_after_failed_mutation_stays_alive(stub_embedder, stub_back
     assert ctx.needs_handoff is False
     assert ctx.stop_reason == "needs_clarification"
     assert ctx.superego_result.response == "final reply"   # voiced → conversation stays alive
+    assert ctx.metadata["voice_correction"]["reason"] == "fix it"
 
 
 async def test_correction_loop_recovers_and_voices(stub_embedder, stub_backend, dispatcher):
@@ -166,6 +169,7 @@ async def test_correction_loop_recovers_and_voices(stub_embedder, stub_backend, 
     assert ego.invocations == 2
     assert ctx.needs_handoff is False
     assert ctx.superego_result.response == "final reply"
+    assert "voice_correction" not in ctx.metadata          # approved → no rejection reaches the voice
 
 
 async def test_correction_rerun_does_not_replay_confirmed_calls(stub_embedder, stub_backend,
