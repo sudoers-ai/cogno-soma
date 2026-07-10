@@ -141,6 +141,16 @@ class Pipeline:
                         # voice an unverified commit as done). The HOST owns the escalation
                         # policy on this signal (force a real handoff after N).
                         ctx.stop_reason = "needs_clarification"
+                        # The voice must know the execution was rejected — otherwise it only
+                        # sees the successful reads and the upbeat draft and happily narrates
+                        # the goal as done ("Prontinho! confirmados") while the DB never
+                        # changed. Hand it the judge's critique so it grounds a truthful
+                        # continuation instead of claiming completion (anima renders this as
+                        # a hard rule in the voice prompt).
+                        ctx.metadata["voice_correction"] = {
+                            "reason": (judge.critique or "").strip() or
+                                      "the execution did not accomplish the user's goal",
+                        }
                         logger.debug("turn_clarify stop_reason=needs_clarification")
                         # no on_commit: nothing was committed
                     else:
