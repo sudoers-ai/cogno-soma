@@ -185,9 +185,7 @@ class Pipeline:
             # model for this turn (the host's ladder policy); None keeps the configured backend.
             ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
             ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
-            judge = await self._superego.evaluate(
-                ctx, cfg.judge_backend or cfg.gen_backend, limits_prompt=cfg.limits_prompt)
-            ctx.retry_metrics.append(judge.metrics)  # the judge is never the "main" superego (voice is)
+            judge = await self._judge(ctx, cfg)
             if judge.approved or attempt >= cfg.max_corrections:
                 break
             # rejected → this EGO attempt becomes retry history; feed the critique back
@@ -201,6 +199,27 @@ class Pipeline:
             ctx.metadata.pop("ego_confirmed_calls", None)
             attempt += 1
         return judge
+
+    async def _judge(self, ctx, cfg: TurnConfig):
+        """One judge verdict, optionally two-tier (``judge_fast_backend``).
+
+        The fast judge screens every attempt; only its REJECTIONS escalate to the
+        strong judge, whose verdict is authoritative. A fast approve is final (the
+        cost bet), and fail-CLOSED is preserved: nothing gets approved that neither
+        judge approved. Every call's metrics land in ``retry_metrics`` (the judge is
+        never the "main" superego — voice is), distinguished by the model field.
+        """
+        strong = cfg.judge_backend or cfg.gen_backend
+        fast = cfg.judge_fast_backend
+        if fast is not None and fast is not strong:
+            verdict = await self._superego.evaluate(ctx, fast, limits_prompt=cfg.limits_prompt)
+            ctx.retry_metrics.append(verdict.metrics)
+            if verdict.approved:
+                return verdict
+            logger.debug("judge_escalated fast_model=%s", getattr(fast, "model", "unknown"))
+        verdict = await self._superego.evaluate(ctx, strong, limits_prompt=cfg.limits_prompt)
+        ctx.retry_metrics.append(verdict.metrics)
+        return verdict
 
     async def _finish(self, ctx, hooks: Hooks) -> PipelineContext:
         await self._fire(hooks.after_turn, ctx)
