@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Sequence
 
+from cogno_anima import metakeys as mk
 from cogno_anima.tools import ToolDispatcher
 from cogno_anima.types import PipelineContext
 
@@ -87,13 +88,13 @@ class SessionRunner:
         self._turn += 1
         ctx = PipelineContext(user_input=user_input, force_language=self._force_language)
         ctx.metadata.update(self._carry)
-        ctx.metadata["turn_number"] = self._turn
+        ctx.metadata[mk.TURN_NUMBER] = self._turn
         if self._persona_id:
-            ctx.metadata["active_persona_id"] = self._persona_id
+            ctx.metadata[mk.ACTIVE_PERSONA_ID] = self._persona_id
         if self._mcp_module:
-            ctx.metadata["active_mcp_module"] = self._mcp_module
+            ctx.metadata[mk.ACTIVE_MCP_MODULE] = self._mcp_module
         if self._history:
-            ctx.metadata["last_rewritten"] = self._history[-1]
+            ctx.metadata[mk.LAST_REWRITTEN] = self._history[-1]
         # Conversation context: the recent transcript (so a follow-up resolves against what was
         # actually said — "Vinicius Vale" answers the assistant's "com quem?") + host memories.
         blocks: list[str] = []
@@ -108,11 +109,11 @@ class SessionRunner:
             # Also expose the raw transcript to the perception stages (NOUMENO/NER read this, not
             # ego_context) so a bare follow-up ("com o Vinicius Vale") resolves against the
             # assistant's last question instead of being classified UNKNOWN and scope-blocked.
-            ctx.metadata["conversation_history"] = transcript
+            ctx.metadata[mk.CONVERSATION_HISTORY] = transcript
         if memories:
             blocks.append("[MEMORIES]\n" + "\n".join(memories))
         if blocks:
-            ctx.metadata["ego_context"] = "\n\n".join(blocks)
+            ctx.metadata[mk.EGO_CONTEXT] = "\n\n".join(blocks)
         if metadata:
             ctx.metadata.update(metadata)
 
@@ -132,11 +133,11 @@ class SessionRunner:
         return disp
 
     def _thread_forward(self, ctx: PipelineContext, user_input: str) -> None:
-        carry: dict = {"id_state": ctx.metadata.get("id_state", {})}
+        carry: dict = {mk.ID_STATE: ctx.metadata.get(mk.ID_STATE, {})}
         if ctx.intent and ctx.intent.goal:
-            carry["last_goal"] = ctx.intent.goal
+            carry[mk.LAST_GOAL] = ctx.intent.goal
         if ctx.intent and ctx.intent.domains:
-            carry["active_domains"] = ctx.intent.domains
+            carry[mk.ACTIVE_DOMAINS] = ctx.intent.domains
         self._carry = carry
         if ctx.noumeno:
             self._history.append(ctx.noumeno.rewritten)
