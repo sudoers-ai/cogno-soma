@@ -16,6 +16,19 @@ soma never touches a DB, an MCP client, billing, or a persona store.
 NOUMENO → NER → ID → [PII gate] → [scope gate] → EGO ⇄ SUPEREGO(judge) → SUPEREGO(voice)
 ```
 
+## See it run — a complete agent in 15 minutes
+
+The SECRETARY demo in
+[`cogno-praxis`](https://github.com/sudoers-ai/cogno-praxis#quickstart--a-complete-agent-in-15-minutes)
+is soma doing its job end-to-end: the full cognitive loop over local Ollama,
+with a real scheduling vertical served as an MCP subprocess and the cognition
+visible stage by stage (`--trace`). Free, offline, any language in:
+
+```bash
+git clone https://github.com/sudoers-ai/cogno-praxis && cd cogno-praxis
+python examples/secretary_demo.py --trace     # full install chain in the praxis README
+```
+
 ## Install
 
 ```bash
