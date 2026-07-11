@@ -25,6 +25,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from cogno_anima import metakeys as mk
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
@@ -119,7 +120,7 @@ class Pipeline:
             # A confirmed action (gate-B completion) MUST run through the EGO to be executed,
             # even when the user's bare "sim" would otherwise route to the SUPEREGO — otherwise
             # the approved call is never dispatched (and its side effects never fire).
-            force_ego = bool(ctx.metadata.get("ego_confirmed") and ctx.metadata.get("ego_confirmed_calls"))
+            force_ego = bool(ctx.metadata.get(mk.EGO_CONFIRMED) and ctx.metadata.get(mk.EGO_CONFIRMED_CALLS))
             if force_ego or (ctx.id_result and ctx.id_result.triad_route == "EGO"):
                 judge = await self._run_ego_loop(ctx, cfg, dispatcher, hooks)
                 await self._fire(hooks.after_ego, ctx)
@@ -147,7 +148,7 @@ class Pipeline:
                         # changed. Hand it the judge's critique so it grounds a truthful
                         # continuation instead of claiming completion (anima renders this as
                         # a hard rule in the voice prompt).
-                        ctx.metadata["voice_correction"] = {
+                        ctx.metadata[mk.VOICE_CORRECTION] = {
                             "reason": (judge.critique or "").strip() or
                                       "the execution did not accomplish the user's goal",
                         }
@@ -192,11 +193,11 @@ class Pipeline:
             if ctx.ego_result:
                 ctx.retry_metrics.append(ctx.ego_result.metrics)
             await self._fire(hooks.on_rollback, ctx)
-            ctx.metadata["ego_correction"] = {"reason": judge.critique, "attempt": attempt + 1}
+            ctx.metadata[mk.EGO_CORRECTION] = {"reason": judge.critique, "attempt": attempt + 1}
             # Gate-B replay is once-only: the confirmed calls were already executed on this
             # attempt (their outcome is in the trace) — a correction re-run must NOT replay
             # them, or a rejected-but-successful call would execute twice (double booking).
-            ctx.metadata.pop("ego_confirmed_calls", None)
+            ctx.metadata.pop(mk.EGO_CONFIRMED_CALLS, None)
             attempt += 1
         return judge
 
