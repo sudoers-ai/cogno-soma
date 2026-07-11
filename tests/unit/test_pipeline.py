@@ -3,6 +3,8 @@
 
 from cogno_soma import Pipeline, TurnConfig
 
+from cogno_anima.types import SuperegoResult
+
 from tests.conftest import (
     FakeEgo,
     FakeID,
@@ -10,6 +12,7 @@ from tests.conftest import (
     FakeNoumeno,
     FakeSuperego,
     StubBackend,
+    metrics,
 )
 
 
@@ -349,3 +352,89 @@ async def test_unpinned_json_stage_falls_back_to_gen(stub_embedder, dispatcher):
     await pipe.run_turn(_ctx(), cfg, dispatcher=dispatcher)
     assert log["noumeno"] is gen                  # fell back to gen_backend
     assert log["ner"] is ner_b                    # its own model
+
+# ── two-tier judge (judge_fast_backend) ─────────────────────────────────────
+
+class _BackendAwareSuperego(FakeSuperego):
+    """A FakeSuperego whose judge verdict depends on WHICH backend evaluates:
+    the backend's ``model`` is looked up in ``verdicts`` (default approve)."""
+
+    def __init__(self, verdicts: dict, **kw) -> None:
+        super().__init__(**kw)
+        self._verdicts = verdicts
+        self.judged_with: list = []
+
+    async def evaluate(self, ctx, backend, *, limits_prompt):
+        model = getattr(backend, "model", "unknown")
+        self.judged_with.append(model)
+        approved = self._verdicts.get(model, True)
+        return SuperegoResult(response="", approved=approved,
+                              critique=None if approved else self._critique,
+                              metrics=metrics("superego_judge"))
+
+
+def _two_backends():
+    fast, strong = StubBackend(), StubBackend()
+    fast.model, strong.model = "fast-judge", "strong-judge"
+    return fast, strong
+
+
+async def test_two_tier_fast_approve_is_final(stub_embedder, stub_backend, dispatcher):
+    """Fast judge approves → the strong judge is never consulted (the cost bet)."""
+    fast, strong = _two_backends()
+    sup = _BackendAwareSuperego({"fast-judge": True})
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), superego=sup)
+    ctx = await pipe.run_turn(
+        _ctx(), _cfg(stub_backend, judge_backend=strong, judge_fast_backend=fast),
+        dispatcher=dispatcher)
+    assert sup.judged_with == ["fast-judge"]
+    assert ctx.superego_result.response == "final reply"
+    assert "voice_correction" not in ctx.metadata
+
+
+async def test_two_tier_fast_reject_escalates_and_strong_overrides(
+        stub_embedder, stub_backend, dispatcher):
+    """Fast rejects (the over-block case) → strong re-judges and its APPROVE wins:
+    no correction retry is spent on a fast false-reject."""
+    fast, strong = _two_backends()
+    ego = FakeEgo()
+    sup = _BackendAwareSuperego({"fast-judge": False, "strong-judge": True})
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego, superego=sup)
+    ctx = await pipe.run_turn(
+        _ctx(), _cfg(stub_backend, judge_backend=strong, judge_fast_backend=fast,
+                     max_corrections=3),
+        dispatcher=dispatcher)
+    assert sup.judged_with == ["fast-judge", "strong-judge"]
+    assert ego.invocations == 1                       # no retry was triggered
+    assert "voice_correction" not in ctx.metadata
+
+
+async def test_two_tier_both_reject_drives_correction(stub_embedder, stub_backend, dispatcher):
+    """Both tiers reject → the correction loop runs (strong critique feeds the retry),
+    and every judge call of every attempt is billed in retry_metrics."""
+    fast, strong = _two_backends()
+    ego = FakeEgo()
+    sup = _BackendAwareSuperego({"fast-judge": False, "strong-judge": False},
+                                critique="wrong tool")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego, superego=sup)
+    ctx = await pipe.run_turn(
+        _ctx(), _cfg(stub_backend, judge_backend=strong, judge_fast_backend=fast,
+                     max_corrections=2),
+        dispatcher=dispatcher)
+    # 2 attempts × (fast + strong)
+    assert sup.judged_with == ["fast-judge", "strong-judge"] * 2
+    assert ego.invocations == 2
+    assert ctx.metadata["voice_correction"]["reason"] == "wrong tool"
+    assert [m.stage for m in ctx.retry_metrics].count("superego_judge") == 4
+
+
+async def test_two_tier_same_backend_judges_once(stub_embedder, stub_backend, dispatcher):
+    """judge_fast_backend IS the strong judge → degrade to single-tier (no double call)."""
+    fast, _ = _two_backends()
+    sup = _BackendAwareSuperego({"fast-judge": False}, critique="nope")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), superego=sup)
+    await pipe.run_turn(
+        _ctx(), _cfg(stub_backend, judge_backend=fast, judge_fast_backend=fast,
+                     max_corrections=1),
+        dispatcher=dispatcher)
+    assert sup.judged_with == ["fast-judge"]

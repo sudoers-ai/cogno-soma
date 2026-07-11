@@ -52,6 +52,12 @@ class TurnConfig:
     ner_backend: Optional[LLMBackend] = None      # None → gen_backend
     scope_backend: Optional[LLMBackend] = None    # None → gen_backend
     judge_backend: Optional[LLMBackend] = None    # None → gen_backend
+    # Two-tier judge: a cheap screening judge runs first on every EGO attempt; only its
+    # REJECTIONS are re-judged by the strong judge (judge_backend), whose verdict is
+    # authoritative. A fast approve is final — that is the cost bet: the happy path
+    # (most turns) costs the cheap model, and the strong model is paid only on rejects.
+    # None → single-tier (judge_backend or gen_backend), identical to before.
+    judge_fast_backend: Optional[LLMBackend] = None
     # Host escalation policy consulted AFTER the ID computes complexity: a hard task can bump the
     # EGO onto a stronger model for this turn. None → no escalation (the configured backends run).
     escalate: Optional[EscalateFn] = None
