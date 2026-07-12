@@ -141,6 +141,19 @@ async def test_correction_loop_retries_until_budget(stub_embedder, stub_backend,
     assert ctx.metadata["voice_correction"]["reason"] == "fix it"
 
 
+async def test_plan_max_self_corrections_caps_the_loop(stub_embedder, stub_backend, dispatcher):
+    """The per-plan correction budget (plan_limits.max_self_corrections, injected by the host's
+    BudgetGuard) OVERRIDES cfg.max_corrections — a Free tenant (1) does ONE EGO attempt even when
+    the config would allow 3. Without plan_limits it falls back to cfg (see the test above)."""
+    ego = FakeEgo()
+    sup = FakeSuperego(approve=False)     # judge rejects every attempt → would retry up to the budget
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego, superego=sup)
+    ctx = _ctx()
+    ctx.metadata["plan_limits"] = {"max_self_corrections": 1}   # Free tier: 1 attempt, no retry
+    ctx = await pipe.run_turn(ctx, _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
+    assert ego.invocations == 1           # plan cap (1) wins over cfg.max_corrections (3)
+
+
 async def test_reject_after_side_effect_hands_off(stub_embedder, stub_backend, dispatcher):
     """Judge rejects AND the EGO already committed a mutating call (side_effect) → hand off.
     Fail-closed: never voice an unverified action as done."""
