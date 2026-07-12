@@ -181,13 +181,20 @@ class Pipeline:
         """The EGO⇄SUPEREGO correction loop; returns the last judge result."""
         attempt = 1
         judge = None
+        # The correction budget is per-plan: the host's BudgetGuard injects ``plan_limits`` into
+        # ctx.metadata, so a Free tenant caps at fewer EGO attempts than a paid one (was ignored —
+        # the loop always used cfg.max_corrections). Falls back to cfg.max_corrections when no plan
+        # is present (host without a subscription store); clamped to >= 1 (always one attempt).
+        max_corrections = max(1, int(
+            (ctx.metadata.get("plan_limits") or {}).get("max_self_corrections") or cfg.max_corrections
+        ))
         while True:
             # Complexity escalation: after the ID, a hard task can bump the EGO onto a stronger
             # model for this turn (the host's ladder policy); None keeps the configured backend.
             ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
             ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
             judge = await self._judge(ctx, cfg)
-            if judge.approved or attempt >= cfg.max_corrections:
+            if judge.approved or attempt >= max_corrections:
                 break
             # rejected → this EGO attempt becomes retry history; feed the critique back
             if ctx.ego_result:
