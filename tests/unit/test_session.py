@@ -99,7 +99,9 @@ async def test_memories_injected_as_ego_context(stub_embedder, stub_backend):
     pipe._id.process = spy  # type: ignore[method-assign]
     sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
     await sess.run("what's my balance", memories=["balance is 100", "currency BRL"])
-    assert seen["ego_context"] == "[MEMORIES]\nbalance is 100\ncurrency BRL"
+    # The SOURCES instruction always leads; memories land in their own labelled layer.
+    assert "[SOURCES]" in seen["ego_context"]
+    assert seen["ego_context"].endswith("[MEMORIES]\nbalance is 100\ncurrency BRL")
 
 
 async def test_transcript_feeds_conversation_history(stub_embedder, stub_backend):
@@ -118,11 +120,57 @@ async def test_transcript_feeds_conversation_history(stub_embedder, stub_backend
     await sess.run("quero marcar com o cardiologista")
     await sess.run("Vinicius Vale")
     hist = seen["ego_context"]
-    assert "[CONVERSATION HISTORY]" in hist
+    assert "[RECENT CONVERSATION]" in hist
     assert "User: quero marcar com o cardiologista" in hist
     assert "Assistant: final reply" in hist            # the voiced reply, not just the user text
-    # and the transcript is in the serializable state (survives a worker handoff)
-    assert sess.state["transcript"][-1] == ["Vinicius Vale", "final reply"]
+    # and the transcript is in the serializable state (survives a worker handoff), now with a ts
+    row = sess.state["transcript"][-1]
+    assert row[:2] == ["Vinicius Vale", "final reply"] and isinstance(row[2], float)
+
+
+async def test_stale_exchange_drops_out_of_verbatim_window(stub_embedder, stub_backend):
+    # THE 2026-07 DOCTOR'S-AGENDA FABRICATION: a listing from days ago must NOT sit verbatim in
+    # the next turn's context (that is where the voicer copied it over an empty fresh read). An
+    # exchange older than the burst gap leaves [RECENT CONVERSATION] entirely.
+    pipe = _pipe(stub_embedder)
+    seen: dict = {}
+    orig = pipe._id.process
+
+    async def spy(ctx, embedder):
+        seen["ego_context"] = ctx.metadata.get("ego_context")
+        return await orig(ctx, embedder)
+
+    pipe._id.process = spy  # type: ignore[method-assign]
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("aqui está sua agenda: consulta 13/07", now=1000.0)   # the "old listing" turn
+    await sess.run("Oi", now=1000.0 + 3 * 24 * 3600)                     # 3 days later
+    ctx_seen = seen["ego_context"]
+    assert "13/07" not in ctx_seen                    # the stale listing is gone
+    assert "[RECENT CONVERSATION]" not in ctx_seen    # nothing verbatim across the gap
+    assert "[SOURCES]" in ctx_seen                     # but the sources guard still leads
+    # a same-burst follow-up DOES stay verbatim
+    await sess.run("e amanhã?", now=1000.0 + 3 * 24 * 3600 + 60)
+    assert "User: Oi" in seen["ego_context"]
+
+
+async def test_layers_are_ordered_by_authority(stub_embedder, stub_backend):
+    pipe = _pipe(stub_embedder)
+    seen: dict = {}
+    orig = pipe._id.process
+
+    async def spy(ctx, embedder):
+        seen["ego_context"] = ctx.metadata.get("ego_context")
+        return await orig(ctx, embedder)
+
+    pipe._id.process = spy  # type: ignore[method-assign]
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("oi", memories=["prefers PIX"],
+                   prior_summary="Earlier: discussed a July booking.",
+                   graph_context="Dr. Vale — cardiologist")
+    ctx_seen = seen["ego_context"]
+    order = [ctx_seen.index(lbl) for lbl in
+             ("[SOURCES]", "[EARLIER CONTEXT]", "[MEMORIES]", "[KNOWLEDGE GRAPH]")]
+    assert order == sorted(order)                      # authority order preserved
 
 
 async def test_transcript_window_is_bounded(stub_embedder, stub_backend):
