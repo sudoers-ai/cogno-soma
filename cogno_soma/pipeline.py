@@ -193,6 +193,15 @@ class Pipeline:
             # model for this turn (the host's ladder policy); None keeps the configured backend.
             ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
             ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
+            # Gate B held a destructive call → a PROPOSE turn: the action was deliberately NOT
+            # executed (the host runs the confirmation UX next; ``_awaiting_confirmation`` is set
+            # independently in the assembler). There is nothing to judge-and-retry — the booking is
+            # intentionally incomplete — so skip the judge: it would false-reject "booking not
+            # completed" and burn a wasteful EGO retry on EVERY confirmation turn (measured:
+            # the gpt-4o-mini judge rejects the [PENDING CONFIRMATION] hold 3/3). Voice grounds it.
+            if ctx.ego_result and ctx.ego_result.pending_confirmation:
+                judge = SuperegoResult(approved=True, metrics=_zero_metrics())
+                break
             judge = await self._judge(ctx, cfg)
             if judge.approved or attempt >= max_corrections:
                 break
