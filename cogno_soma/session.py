@@ -195,6 +195,10 @@ class SessionRunner:
         self._carry = carry
         if ctx.noumeno:
             self._history.append(ctx.noumeno.rewritten)
+            # Only the last rewrite is ever read (LAST_REWRITTEN), and `state` re-serializes the
+            # whole list every turn — cap it like `_transcript` so a long-lived session persisted
+            # to Redis doesn't churn an unbounded O(n) blob (O(n^2) over the conversation).
+            self._history = self._history[-self._max_history:]
         # Record the exchange (user + voiced reply + this turn's timestamp) for the next turn's
         # conversation context, keeping only the most recent window so state stays bounded.
         reply = ctx.superego_result.response if ctx.superego_result else ""

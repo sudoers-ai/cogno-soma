@@ -179,6 +179,7 @@ async def test_transcript_window_is_bounded(stub_embedder, stub_backend):
     for i in range(5):
         await sess.run(f"turn {i}")
     assert len(sess.state["transcript"]) == 2           # only the last 2 exchanges kept
+    assert len(sess.state["history"]) == 2              # history bounded too (only its tail is read)
 
 
 async def test_state_round_trip_resumes_session(stub_embedder, stub_backend):
