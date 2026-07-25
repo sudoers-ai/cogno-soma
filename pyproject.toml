@@ -24,8 +24,8 @@ classifiers = [
 # (it re-exports the cogno-synapse protocols soma also imports directly). Neither is
 # on PyPI yet; CI installs them from git first (see .github/workflows/ci.yml).
 dependencies = [
-    "cogno-anima",
-    "cogno-synapse",
+    "cogno-anima>=0.1,<0.2",
+    "cogno-synapse>=0.1,<0.2",
 ]
 
 [project.urls]
