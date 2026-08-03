@@ -154,6 +154,32 @@ async def test_plan_max_self_corrections_caps_the_loop(stub_embedder, stub_backe
     assert ego.invocations == 1           # plan cap (1) wins over cfg.max_corrections (3)
 
 
+class _PendingConfirmEgo(FakeEgo):
+    """A FakeEgo that HELD a destructive call for confirmation (Gate B) — nothing executed."""
+
+    async def process(self, ctx, backend, dispatcher, *, system_prompt):
+        from cogno_anima.types import EgoResult, EgoStep, ToolExecution
+        ctx = await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+        held = ToolExecution(tool="book_appointment", ok=False, error="needs_confirmation",
+                             result="[PENDING CONFIRMATION] held")
+        ctx.ego_result = EgoResult(steps=[EgoStep(index=0, path="native", tool_calls=[held])],
+                                   pending_confirmation=[held], metrics=ctx.ego_result.metrics)
+        return ctx
+
+
+async def test_gate_b_hold_skips_judge_and_retry(stub_embedder, stub_backend, dispatcher):
+    """A Gate-B confirmation hold is a PROPOSE turn — the judge is skipped entirely (it would
+    false-reject 'booking not completed' and burn a wasteful retry on every confirmation)."""
+    ego = _PendingConfirmEgo()
+    sup = FakeSuperego(approve=False)      # the judge WOULD reject — but must not be consulted
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego, superego=sup)
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
+    assert ego.invocations == 1                          # no retry
+    assert sup._evals == 0                               # judge NEVER consulted for a Gate-B hold
+    assert ctx.stop_reason != "needs_clarification"      # not a false rejection
+    assert ctx.superego_result.response == "final reply"  # voiced the proposal
+
+
 async def test_reject_after_side_effect_hands_off(stub_embedder, stub_backend, dispatcher):
     """Judge rejects AND the EGO already committed a mutating call (side_effect) → hand off.
     Fail-closed: never voice an unverified action as done."""
