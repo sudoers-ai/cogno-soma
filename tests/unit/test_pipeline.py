@@ -473,3 +473,24 @@ async def test_rejection_kind_separates_an_unverified_claim_from_a_failed_action
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
                               dispatcher=dispatcher)
     assert ctx.metadata["voice_correction"]["kind"] == "not_executed"
+
+
+async def test_the_judge_verdict_is_recorded_so_it_can_be_counted(
+        stub_embedder, stub_backend, dispatcher):
+    """Only REJECTIONS were observable: they log at WARNING while approvals log at INFO, which a
+    deployment's handlers may drop. "No approvals in the log" then reads identically to "the
+    judge approves nothing" — and a full day went into chasing the wrong one. A rate needs a
+    denominator, so the outcome rides on the context."""
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(),
+                     superego=FakeSuperego(approve=True))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+    assert ctx.metadata["judge_verdict"] == {"approved": True, "attempts": 1}
+
+    # and a turn that burned the whole budget reports the attempts it took
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3),
+                              dispatcher=dispatcher)
+    assert ctx.metadata["judge_verdict"]["approved"] is False
+    assert ctx.metadata["judge_verdict"]["attempts"] == 3

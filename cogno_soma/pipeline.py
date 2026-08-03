@@ -218,6 +218,13 @@ class Pipeline:
             # them, or a rejected-but-successful call would execute twice (double booking).
             ctx.metadata.pop(mk.EGO_CONFIRMED_CALLS, None)
             attempt += 1
+        # Record the outcome so it can be COUNTED. Only rejections were ever observable (logged
+        # at WARNING; approvals go to INFO, which a deployment's handlers may drop), so "no
+        # approvals in the log" read identically to "the judge approves nothing" — the host had
+        # no denominator and no way to tell a healthy judge from one rejecting 100% of turns.
+        if judge is not None:
+            ctx.metadata[mk.JUDGE_VERDICT] = {"approved": bool(judge.approved),
+                                              "attempts": attempt}
         return judge
 
     async def _judge(self, ctx, cfg: TurnConfig):
