@@ -451,3 +451,25 @@ async def test_two_tier_same_backend_judges_once(stub_embedder, stub_backend, di
                      max_corrections=1),
         dispatcher=dispatcher)
     assert sup.judged_with == ["fast-judge"]
+
+
+async def test_rejection_kind_separates_an_unverified_claim_from_a_failed_action(
+        stub_embedder, stub_backend, dispatcher):
+    """Two different rejections used to wear one signal, and the voice prompt only ever
+    covered the ACTION one ("nothing was committed"). A persona with no tools executes
+    nothing, so the verdict is about what the draft CLAIMS — and the refused claim was
+    re-voiced verbatim (live: "Sim, o Cogno integra com o Bling", rejected twice, delivered).
+    The kind is what lets the voice — and the host's escalation policy — tell them apart."""
+    # FakeEgo has no tools_executed → nothing ran at all
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+    assert ctx.metadata["voice_correction"]["kind"] == "unverified_claim"
+
+    # a mutation that RAN and failed is a different animal: there is a trace to ground in
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_FailedMutationEgo(),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+    assert ctx.metadata["voice_correction"]["kind"] == "not_executed"

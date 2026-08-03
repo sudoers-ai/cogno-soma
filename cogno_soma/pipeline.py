@@ -148,11 +148,23 @@ class Pipeline:
                         # changed. Hand it the judge's critique so it grounds a truthful
                         # continuation instead of claiming completion (anima renders this as
                         # a hard rule in the voice prompt).
+                        # Two different rejections wear the same signal. When the EGO ran
+                        # tools, the verdict is about an ACTION that fell short and the voice
+                        # grounds a continuation in the trace. When NOTHING ran (a persona
+                        # with no tools — a seller, an SDR), there is no trace to ground in:
+                        # the draft is an unverified CLAIM, and re-voicing it ships exactly
+                        # what review just refused. Name the kind so the voice can tell them
+                        # apart — and so the HOST can act on an unverified turn (it could
+                        # previously only infer `needs_clarification`, which a legitimate
+                        # mid-flow question raises too).
+                        kind = ("unverified_claim" if not ego.tools_executed
+                                else "not_executed")
                         ctx.metadata[mk.VOICE_CORRECTION] = {
                             "reason": (judge.critique or "").strip() or
                                       "the execution did not accomplish the user's goal",
+                            "kind": kind,
                         }
-                        logger.debug("turn_clarify stop_reason=needs_clarification")
+                        logger.debug("turn_clarify stop_reason=needs_clarification kind=%s", kind)
                         # no on_commit: nothing was committed
                     else:
                         ctx.needs_handoff = True
