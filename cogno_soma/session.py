@@ -32,11 +32,14 @@ from cogno_soma.pipeline import Pipeline
 # as current data (the 2026-07 doctor's-agenda fabrication: a 2-day-old agenda listing sat
 # in the verbatim window and the voicer copied it over an empty fresh read).
 _SOURCES_INSTRUCTION = (
-    "Facts you state — dates, times, amounts, names, statuses — must come from THIS turn's "
-    "tool results or the user's message. The sections below are SUPPORTING context only: "
-    "RECENT CONVERSATION for reference and continuity, EARLIER CONTEXT / MEMORIES / KNOWLEDGE "
-    "GRAPH for background. Do NOT restate their data as if it were current — when a fact is "
-    "not backed by a fresh tool result this turn, do not assert it."
+    "VOLATILE facts — dates, times, availability, amounts, statuses, anything that changes — "
+    "must come from THIS turn's tool results or the user's message; never restate them from "
+    "the sections below as if they were current. RECENT CONVERSATION is for reference and "
+    "continuity. MEMORIES hold DURABLE facts about this contact and this relationship (their "
+    "name, who referred them, their business, their preferences, operator notes): you MAY "
+    "state those — they were saved to be used, and they outrank anything you previously "
+    "guessed or denied in this conversation. EARLIER CONTEXT / KNOWLEDGE GRAPH are "
+    "background."
 )
 # Verbatim conversation is kept only for the current time-burst: an exchange older than this
 # many seconds from the current turn drops out of the verbatim window (it may still be

@@ -312,3 +312,28 @@ async def test_pii_hint_survives_state_round_trip(stub_embedder, stub_backend):
                           state=sess.state)
     await sess2.run("pode confirmar?")
     assert seen[-1] is True
+
+
+async def test_sources_instruction_keeps_memories_assertable(stub_embedder, stub_backend):
+    """The anti-staleness rule must stay scoped to VOLATILE data. Its first wording forbade
+    asserting ANY fact not backed by a fresh tool result — measured live: the operator's
+    referral note was recalled into [MEMORIES] (rank #1) and the model still answered
+    'não tenho acesso', obeying the instruction to the letter, twice, then stayed
+    consistent with its own denial. Durable contact facts are saved to be USED."""
+    captured: list[str] = []
+    pipe = _pipe(stub_embedder, route="EGO")     # SUPEREGO-routed turns skip the executor
+    orig = pipe._ego.process
+
+    async def spy(ctx, backend, dispatcher, *, system_prompt):
+        captured.append(str(ctx.metadata.get("ego_context", "")))
+        return await orig(ctx, backend, dispatcher, system_prompt=system_prompt)
+    pipe._ego.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("quem te passou meu contato?",
+                   memories=["Nota do operador: veio através do José Manzoli."])
+    src = captured[0]
+    assert "VOLATILE" in src                      # staleness rule survives, scoped
+    assert "DURABLE" in src and "MAY state" in src
+    assert "outrank" in src                       # beats the model's own earlier denial
+    assert "[MEMORIES]" in src and "José Manzoli" in src
