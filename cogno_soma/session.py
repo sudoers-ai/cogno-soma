@@ -192,6 +192,15 @@ class SessionRunner:
             carry[mk.LAST_GOAL] = ctx.intent.goal
         if ctx.intent and ctx.intent.domains:
             carry[mk.ACTIVE_DOMAINS] = ctx.intent.domains
+        # The parent runner's ``_last_pii_risk`` carry, rolling one turn: PII shared THIS
+        # turn arms the ID's anaphoric fast-path + lenient goal threshold on the NEXT
+        # ("confirma se ficou certo?" after a CPF must read as continuation). This key was
+        # read by the ID since day one but never fed by anything — the whole pii-hint path
+        # was dead in production (found porting the parent's memory bench). The carry dict
+        # is rebuilt every turn, so the hint decays naturally; a host metadata override
+        # still wins (run() merges ``metadata`` last).
+        if ctx.intent and ctx.intent.pii:
+            carry[mk.PII_SESSION_HINT] = True
         self._carry = carry
         if ctx.noumeno:
             self._history.append(ctx.noumeno.rewritten)

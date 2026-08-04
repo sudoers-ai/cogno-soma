@@ -80,9 +80,10 @@ class FakeNoumeno:
 
 class FakeNER:
     def __init__(self, *, intent_class="INFORMATION_REQUEST", triad_signal="BALANCED",
-                 goal="help the user", domains=None, calls: Optional[list] = None) -> None:
+                 goal="help the user", domains=None, pii=None,
+                 calls: Optional[list] = None) -> None:
         self._kw = dict(intent_class=intent_class, triad_signal=triad_signal,
-                        goal=goal, domains=domains or [])
+                        goal=goal, domains=domains or [], pii=pii or [])
         self._calls = calls
 
     async def process(self, ctx, backend):
@@ -91,7 +92,8 @@ class FakeNER:
         ctx.intent = IntentResult(
             intent_class=self._kw["intent_class"], sentiment="NEUTRAL", confidence=0.9,
             temporal_class="PRESENT", triad_signal=self._kw["triad_signal"],
-            goal=self._kw["goal"], domains=self._kw["domains"], metrics=metrics("ner"))
+            goal=self._kw["goal"], domains=self._kw["domains"], pii=self._kw["pii"],
+            metrics=metrics("ner"))
         return ctx
 
 

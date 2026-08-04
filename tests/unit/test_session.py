@@ -240,3 +240,75 @@ async def test_metadata_override_merges_last(stub_embedder, stub_backend):
     await sess.run("t1", metadata={"ego_max_steps": 8, "turn_number": 99})
     assert seen["ego_max_steps"] == 8
     assert seen["turn_number"] == 99  # host override beats the auto-increment
+
+
+async def test_pii_hint_carried_one_turn_rolling(stub_embedder, stub_backend):
+    """PII shared this turn arms ``pii_session_hint`` for the NEXT turn only (the parent
+    runner's ``_last_pii_risk``, rolling): the ID's anaphoric fast-path + lenient goal
+    threshold read this key, and it was never fed by anything — the whole path was dead
+    in production until this carry (found porting the parent's memory bench)."""
+    from tests.conftest import FakeNER
+    seen: list = []
+    pipe = _pipe(stub_embedder)
+    pipe._ner = FakeNER(pii=["NATIONAL_ID"])
+
+    orig = pipe._id.process
+
+    async def spy(ctx, embedder):
+        seen.append(ctx.metadata.get("pii_session_hint"))
+        return await orig(ctx, embedder)
+    pipe._id.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("meu CPF é 529.982.247-25")     # turn 1: PII shared → arms the hint
+    assert seen[-1] is None                        # ...but only for the NEXT turn
+    pipe._ner = FakeNER(pii=[])                    # turn 2: no new PII in this turn
+    await sess.run("confirma se ficou certo?")
+    assert seen[-1] is True                        # armed by turn 1's carry
+    await sess.run("e o horário de amanhã?")       # turn 3: turn 2 had no PII
+    assert seen[-1] is None                        # rolling: the hint decayed
+
+
+async def test_pii_hint_host_override_wins(stub_embedder, stub_backend):
+    """``run(metadata=...)`` merges last — a host that injects its own hint value is
+    authoritative over the carry (same contract as every other carried key)."""
+    from tests.conftest import FakeNER
+    seen: list = []
+    pipe = _pipe(stub_embedder)
+    pipe._ner = FakeNER(pii=["CREDENTIAL"])
+
+    orig = pipe._id.process
+
+    async def spy(ctx, embedder):
+        seen.append(ctx.metadata.get("pii_session_hint"))
+        return await orig(ctx, embedder)
+    pipe._id.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("senha: hunter2222")
+    await sess.run("segue igual?", metadata={"pii_session_hint": False})
+    assert seen[-1] is False                       # host override beat the carry
+
+
+async def test_pii_hint_survives_state_round_trip(stub_embedder, stub_backend):
+    """The carry is part of ``.state`` — a rebuilt runner (multi-worker host) keeps the
+    armed hint for the next turn."""
+    from tests.conftest import FakeNER
+    pipe = _pipe(stub_embedder)
+    pipe._ner = FakeNER(pii=["PHONE"])
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("meu telefone é (11) 98482-1841")
+    assert sess.state["carry"]["pii_session_hint"] is True
+
+    seen: list = []
+    pipe2 = _pipe(stub_embedder)
+    orig = pipe2._id.process
+
+    async def spy(ctx, embedder):
+        seen.append(ctx.metadata.get("pii_session_hint"))
+        return await orig(ctx, embedder)
+    pipe2._id.process = spy
+    sess2 = SessionRunner(pipe2, _cfg(stub_backend), dispatcher=RecordingDispatcher(),
+                          state=sess.state)
+    await sess2.run("pode confirmar?")
+    assert seen[-1] is True
