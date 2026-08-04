@@ -64,4 +64,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Integration suite (real model)
-        run: pytest tests/integration -q
+        env:
+          # This runner has no GPU. cogno-synapse defaults to a 120 s per-call timeout, which
+          # is right for a GPU box and short for ONE generation on a 7B model here: the
+          # 2026-08-04 nightly died on httpx.ReadTimeout with nothing wrong but the clock.
+          COGNO_OLLAMA_TIMEOUT: "600"
+        # The assert first: the variable only does anything on cogno-synapse >= 0.1.2, and pip
+        # resolving an older one would silently restore 120 s and turn this job red again for a
+        # reason the log would not name. Fail on the cause, not the symptom.
+        run: |
+          python - <<'EOF'
+          import os
+          from cogno_synapse import OllamaBackend
+          want = int(os.environ["COGNO_OLLAMA_TIMEOUT"])
+          got = OllamaBackend(model="probe").timeout
+          assert got == want, (
+              f"installed cogno-synapse ignores COGNO_OLLAMA_TIMEOUT (timeout={got}, "
+              f"expected {want}) — needs >= 0.1.2, or this job times out on a CPU runner")
+          print(f"ollama timeout = {got}s")
+          EOF
+          pytest tests/integration -q
