@@ -62,6 +62,15 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
+          # The SAME bottom-up git chain the `test` job installs. Without it, `pip install -e .`
+          # resolves cogno-anima from PyPI — and the published wheel is 0.1.0 while git main is
+          # far ahead under the SAME version number, so pip cannot tell them apart and neither
+          # can the log. That is how this job spent four nights red on
+          # `module 'cogno_anima.metakeys' has no attribute 'JUDGE_VERDICT'`: the unit job
+          # tested main, the nightly tested a release from before the key existed.
+          pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
+          pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
+          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git"
           pip install -e ".[dev]"
       - name: Integration suite (real model)
         env:
