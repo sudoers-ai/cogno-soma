@@ -36,6 +36,9 @@ Issues = "https://github.com/sudoers-ai/cogno-soma/issues"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    # tests/unit/test_ci_installs_one_chain.py parses .github/workflows/ci.yml. A hard dep,
+    # not an importorskip: a guard that skips itself is the silence it exists to end.
+    "pyyaml>=6.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0",
     "ruff>=0.5",
