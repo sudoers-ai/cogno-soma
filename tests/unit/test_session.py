@@ -337,3 +337,67 @@ async def test_sources_instruction_keeps_memories_assertable(stub_embedder, stub
     assert "DURABLE" in src and "MAY state" in src
     assert "outrank" in src                       # beats the model's own earlier denial
     assert "[MEMORIES]" in src and "José Manzoli" in src
+
+
+async def test_with_no_verbatim_window_the_recap_is_the_THREAD_not_background(
+        stub_embedder, stub_backend):
+    """"EARLIER CONTEXT is background" holds only while a RECENT CONVERSATION sits above it.
+
+    With an empty burst window the recap is the ONLY account of the conversation the model
+    gets, and calling it background tells the model to ignore everything it knows. Measured on
+    a real WhatsApp conversation (2026-08): a 24h gap emptied the window, the recap was all
+    that reached the model, and it re-opened the conversation from the start — greeting a
+    contact it was mid-diagnosis with. A messaging session never rotates (`session_id` is
+    derived from tenant+channel+sender), so this is not the rare case: it is every gap longer
+    than the burst, for every contact.
+
+    Mutation: use one instruction unconditionally and this dies."""
+    captured: list[str] = []
+    pipe = _pipe(stub_embedder, route="EGO")
+    orig = pipe._ego.process
+
+    async def spy(ctx, backend, dispatcher, *, system_prompt):
+        captured.append(str(ctx.metadata.get("ego_context", "")))
+        return await orig(ctx, backend, dispatcher, system_prompt=system_prompt)
+    pipe._ego.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("e aí?", prior_summary="Estávamos vendo os horários da clínica.")
+    src = captured[0]
+    assert "[RECENT CONVERSATION]" not in src, "premise: the burst window is empty"
+    assert "ONLY account" in src
+    assert "do NOT restart the conversation" in src
+    assert "EARLIER CONTEXT / KNOWLEDGE GRAPH are background" not in src
+
+
+async def test_once_the_conversation_IS_flowing_the_recap_goes_back_to_background(
+        stub_embedder, stub_backend):
+    """The other direction, and it must hold or the fix would promote a stale recap over the
+    live thread — the 2026-07 doctor's-agenda fabrication in reverse."""
+    captured: list[str] = []
+    pipe = _pipe(stub_embedder, route="EGO")
+    orig = pipe._ego.process
+
+    async def spy(ctx, backend, dispatcher, *, system_prompt):
+        captured.append(str(ctx.metadata.get("ego_context", "")))
+        return await orig(ctx, backend, dispatcher, system_prompt=system_prompt)
+    pipe._ego.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("bom dia")                                   # seeds the burst window
+    await sess.run("e aí?", prior_summary="Estávamos vendo os horários.")
+    src = captured[-1]
+    assert "[RECENT CONVERSATION]" in src, "premise: the window carried forward"
+    assert "EARLIER CONTEXT / KNOWLEDGE GRAPH are background" in src
+    assert "ONLY account" not in src
+
+
+async def test_the_volatile_bar_survives_in_BOTH_wordings(stub_embedder, stub_backend):
+    """Whatever else changes, a recap must never be restated as current data. Losing that on
+    the no-transcript path would re-open the fabrication this layering exists to stop."""
+    from cogno_soma.session import (_SOURCES_INSTRUCTION,
+                                    _SOURCES_INSTRUCTION_NO_TRANSCRIPT)
+    for text in (_SOURCES_INSTRUCTION, _SOURCES_INSTRUCTION_NO_TRANSCRIPT):
+        assert "VOLATILE" in text
+        assert "never restate them" in text
+        assert "outrank" in text          # the referral-denial fix, on both paths

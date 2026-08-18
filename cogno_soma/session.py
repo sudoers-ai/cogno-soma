@@ -41,6 +41,34 @@ _SOURCES_INSTRUCTION = (
     "guessed or denied in this conversation. EARLIER CONTEXT / KNOWLEDGE GRAPH are "
     "background."
 )
+# The SAME instruction, minus the last clause, for a turn with NO verbatim window.
+#
+# "EARLIER CONTEXT is background" is true when there is a RECENT CONVERSATION above it — the
+# thread is right there and the recap is context around it. With an empty burst window the
+# recap is not background, it is THE THREAD, and the only account of the conversation the
+# model gets. Telling it to treat that as background is telling it to ignore everything it
+# knows.
+#
+# Measured on a real WhatsApp conversation (2026-08): a 24h gap emptied the window, the recap
+# was all that reached the model, and it re-opened the conversation from the start — greeting
+# a contact it was mid-diagnosis with. A messaging session never rotates (session_id is
+# derived from tenant+channel+sender), so this is not the rare case: it is every gap longer
+# than the burst, for every contact.
+#
+# VOLATILE facts stay barred either way. What changes is only whether the recap may be used
+# to know WHERE THE CONVERSATION IS — never to restate a figure or a status as current.
+_SOURCES_INSTRUCTION_NO_TRANSCRIPT = (
+    "VOLATILE facts — dates, times, availability, amounts, statuses, anything that changes — "
+    "must come from THIS turn's tool results or the user's message; never restate them from "
+    "the sections below as if they were current. There is no verbatim transcript this turn "
+    "(the conversation paused), so EARLIER CONTEXT is your ONLY account of what was already "
+    "discussed: use it to continue the thread — what was asked, what was agreed, what was "
+    "left open — and do NOT restart the conversation or re-introduce yourself. MEMORIES hold "
+    "DURABLE facts about this contact and this relationship (their name, who referred them, "
+    "their business, their preferences, operator notes): you MAY state those — they were "
+    "saved to be used, and they outrank anything you previously guessed or denied in this "
+    "conversation. KNOWLEDGE GRAPH is background."
+)
 # Verbatim conversation is kept only for the current time-burst: an exchange older than this
 # many seconds from the current turn drops out of the verbatim window (it may still be
 # represented, summarised and payload-free, by the host's EARLIER CONTEXT). Coarse on
@@ -139,7 +167,9 @@ class SessionRunner:
         # and payload-free, via prior_summary). A bare "sim" after a long gap is genuinely a new
         # turn and starts clean rather than inheriting a stale antecedent.
         transcript = self._verbatim_transcript(now)
-        blocks: list[str] = [f"[SOURCES]\n{_SOURCES_INSTRUCTION}"]
+        instruction = (_SOURCES_INSTRUCTION if transcript
+                       else _SOURCES_INSTRUCTION_NO_TRANSCRIPT)
+        blocks: list[str] = [f"[SOURCES]\n{instruction}"]
         if transcript:
             blocks.append("[RECENT CONVERSATION]\n" + transcript)
             # The perception stages (NOUMENO/NER) read this to resolve a bare follow-up
