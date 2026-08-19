@@ -38,6 +38,10 @@ from cogno_synapse import Embedder
 from cogno_soma.config import TurnConfig
 from cogno_soma.errors import StopPipeline
 from cogno_soma.hooks import Hooks, HookFn
+# Judge critiques are model prose; the whole point is to make a red check explainable, and a
+# couple of sentences does that. Unbounded, they ride into whatever the host persists.
+_CRITIQUE_CHARS = 400
+
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +219,16 @@ class Pipeline:
                 judge = SuperegoResult(approved=True, metrics=_zero_metrics())
                 break
             judge = await self._judge(ctx, cfg)
+            # Record WHY, not just how many. The rejected attempts' critiques were fed into
+            # EGO_CORRECTION.reason (overwritten each attempt) and then dropped, so after the
+            # turn the only surviving fact was the count — and a red bench check could not be
+            # explained without attaching a debugger to the judge. Truncated: this rides in
+            # metadata the host persists, and a full critique per attempt is unbounded text.
+            ctx.metadata.setdefault(mk.JUDGE_ATTEMPTS, []).append({
+                "attempt": attempt,
+                "approved": bool(judge.approved),
+                "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
+            })
             if judge.approved or attempt >= max_corrections:
                 break
             # rejected → this EGO attempt becomes retry history; feed the critique back

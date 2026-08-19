@@ -520,3 +520,48 @@ async def test_the_judge_verdict_is_recorded_so_it_can_be_counted(
                               dispatcher=dispatcher)
     assert ctx.metadata["judge_verdict"]["approved"] is False
     assert ctx.metadata["judge_verdict"]["attempts"] == 3
+
+
+async def test_every_judge_verdict_is_recorded_with_its_critique(
+        stub_embedder, stub_backend, dispatcher):
+    """The count says how many; this says WHY — and the why is the half that was missing.
+
+    A rejected attempt's critique went into ``EGO_CORRECTION.reason``, was overwritten by the
+    next one, and then dropped. After the turn nothing survived but the number, so a red bench
+    check could not be explained without attaching a debugger to the judge — done twice in one
+    day, after three wrong hypotheses. Worse, contradictory critiques across attempts (rejecting
+    a turn for listing rows, then for not listing them) were invisible: exactly the shape that
+    tells you the criteria, not the execution, are what is broken.
+
+    Approvals are recorded too. A list holding only rejections would make "approved on the
+    second try" indistinguishable from "rejected once and gave up"."""
+    sup = FakeSuperego(approve=False, critique="the execution did not do X")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(), superego=sup)
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3),
+                              dispatcher=dispatcher)
+    attempts = ctx.metadata["judge_attempts"]
+    assert [a["attempt"] for a in attempts] == [1, 2, 3]
+    assert all(a["approved"] is False for a in attempts)
+    assert all(a["critique"] == "the execution did not do X" for a in attempts)
+
+    # …and a turn that recovers records the rejection AND the approval that followed it
+    sup = FakeSuperego(approve=False, approve_after=2, critique="wrong row")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(), superego=sup)
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3),
+                              dispatcher=dispatcher)
+    attempts = ctx.metadata["judge_attempts"]
+    assert [a["approved"] for a in attempts] == [False, True]
+    assert attempts[0]["critique"] == "wrong row"
+
+
+async def test_a_long_critique_is_truncated_before_it_rides_on_the_context(
+        stub_embedder, stub_backend, dispatcher):
+    """This metadata is persisted by the host. A judge critique is model prose with no length
+    contract, and one per attempt, so unbounded it grows a stored record nobody bounded."""
+    from cogno_soma.pipeline import _CRITIQUE_CHARS
+
+    sup = FakeSuperego(approve=False, critique="x" * (_CRITIQUE_CHARS * 3))
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(), superego=sup)
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    assert len(ctx.metadata["judge_attempts"][0]["critique"]) == _CRITIQUE_CHARS
