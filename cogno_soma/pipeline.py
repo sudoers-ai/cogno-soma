@@ -21,6 +21,7 @@ that state for a multi-turn session.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -41,6 +42,60 @@ from cogno_soma.hooks import Hooks, HookFn
 # Judge critiques are model prose; the whole point is to make a red check explainable, and a
 # couple of sentences does that. Unbounded, they ride into whatever the host persists.
 _CRITIQUE_CHARS = 400
+
+# Same bound, same reason, for what each attempt EXECUTED: a tool result is model-facing prose
+# and the arguments can embed user text, so both are stringified and cut before they ride in
+# persisted metadata. Small on purpose — the question this answers is "which rows did the
+# rejected attempt touch", not "what did the tool say in full".
+_TOOL_RESULT_CHARS = 200
+_TOOL_ARGS_CHARS = 160
+# Entries per attempt. The per-field cuts bound each entry; nothing bounded the LIST — and the
+# real ceiling is not the default max_steps: premium plans inject ego_max_steps=25, calls per
+# step are uncapped, and blocked/duplicate calls are recorded too. Review measured the worst
+# case at ~375 entries (~160 KB) for ONE turn. Enough survives to answer "which rows"; the
+# overflow is counted, never silent.
+_TOOLS_PER_ATTEMPT = 30
+
+
+def _cut(text: str, limit: int) -> str:
+    """Truncate WITH a marker. A cut JSON string without one renders as broken-but-plausible
+    JSON presented as if complete — the reader cannot tell truncation from corruption."""
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _outcome(exec_) -> str:
+    """What the call came back with. `result or error` alone drops the error TAXONOMY whenever
+    both are set — anima's synthesized blocked/duplicate executions carry error="blocked_retry"
+    /"duplicate" PLUS model-facing prose — so both travel when they say different things."""
+    result = (exec_.result or "").strip()
+    error = (exec_.error or "").strip()
+    if error and error not in result:
+        return f"{error}: {result}" if result else error
+    return result
+
+
+def _attempt_tools(ego_result) -> dict:
+    """The executions of ONE attempt, bounded, as {"tools": [...]} (+ error/overflow keys).
+
+    Wrapped whole because this runs inside the PRODUCTION correction loop and telemetry must
+    never be the reason a turn dies. `default=str` closes only one of json.dumps's raise
+    paths — a NON-STRING dict key raises TypeError regardless (verified), and a __str__ that
+    itself raises unwinds too. A degraded entry beats a dead turn."""
+    try:
+        execs = ego_result.tools_executed if ego_result else []
+        entry: dict = {"tools": [
+            {"tool": t.tool,
+             "args": _cut(json.dumps(t.arguments or {}, ensure_ascii=False, default=str),
+                          _TOOL_ARGS_CHARS),
+             "ok": bool(t.ok), "side_effect": bool(t.side_effect),
+             "result": _cut(_outcome(t), _TOOL_RESULT_CHARS)}
+            for t in execs[:_TOOLS_PER_ATTEMPT]
+        ]}
+        if len(execs) > _TOOLS_PER_ATTEMPT:
+            entry["tools_dropped"] = len(execs) - _TOOLS_PER_ATTEMPT
+        return entry
+    except Exception as exc:  # noqa: BLE001 — degraded telemetry, never a dead turn
+        return {"tools": [], "tools_error": type(exc).__name__}
 
 
 logger = logging.getLogger(__name__)
@@ -133,6 +188,17 @@ class Pipeline:
                     # A COMMITTED side effect requires the mutating call to have SUCCEEDED
                     # (ok) — a mutation that FAILED (e.g. the confirmed slot was taken between
                     # propose and commit) changed nothing, so it is not a commit to misreport.
+                    #
+                    # KNOWN HOLE (review 2026-08-20): this reads only the FINAL attempt's
+                    # tools_executed, so a successful-but-rejected mutation from an EARLIER
+                    # attempt is invisible here — the doctor-notify shape (attempt 1 commits
+                    # three wrong confirms, judge rejects, attempt 2 only reads) takes
+                    # needs_clarification, not the handoff the promise below implies. The
+                    # per-attempt record (JUDGE_ATTEMPTS, this same changeset) now carries the
+                    # data to fix it, but deriving turn POLICY from it changes stop_reason on
+                    # real turns and needs its own measured pass — visibility first, policy
+                    # second. Until then the fail-closed promise holds only for the final
+                    # attempt.
                     committed = ego is not None and any(
                         t.side_effect and t.ok for t in ego.tools_executed)
                     if ego is not None and not committed:
@@ -224,10 +290,21 @@ class Pipeline:
             # turn the only surviving fact was the count — and a red bench check could not be
             # explained without attaching a debugger to the judge. Truncated: this rides in
             # metadata the host persists, and a full critique per attempt is unbounded text.
+            # …and record what this attempt EXECUTED, because the verdict alone hides the
+            # dangerous half. `ctx = await self._ego.process(...)` REPLACES ctx.ego_result on
+            # every retry, so a write made by a rejected attempt vanished from everything
+            # downstream — the voice, the after-turn hooks, the bench evidence — while the
+            # write itself had COMMITTED (nothing here rolls back). Measured long before this
+            # fix (doctor-notify, 2026-08): attempt 1 wrongly confirmed all three rows, the
+            # judge rightly rejected it, attempt 2 truthfully said "no pendings", and the turn
+            # shipped hiding three commits. The critiques became data in #30; this closes the
+            # other eye. Rollback / judge-aware voicing remain deliberately OUT of scope: this
+            # makes the writes VISIBLE, it does not undo them.
             ctx.metadata.setdefault(mk.JUDGE_ATTEMPTS, []).append({
                 "attempt": attempt,
                 "approved": bool(judge.approved),
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
+                **_attempt_tools(ctx.ego_result),
             })
             if judge.approved or attempt >= max_corrections:
                 break
