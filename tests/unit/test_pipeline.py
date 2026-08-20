@@ -554,6 +554,155 @@ async def test_every_judge_verdict_is_recorded_with_its_critique(
     assert attempts[0]["critique"] == "wrong row"
 
 
+async def test_a_rejected_attempts_writes_survive_into_the_record(
+        stub_embedder, stub_backend, dispatcher):
+    """The dangerous half of a rejected attempt is not the critique — it is what it WROTE.
+
+    `ctx = await self._ego.process(...)` replaces `ego_result` on every retry, so a write made
+    by attempt 1 vanished from everything downstream while the write itself had COMMITTED
+    (nothing rolls back). Measured on doctor-notify (2026-08): attempt 1 wrongly confirmed all
+    three rows, the judge rightly rejected it, attempt 2 truthfully said "no pendings", and the
+    turn shipped hiding three commits. The critiques became data in #30; this pins the other
+    eye: every JUDGE_ATTEMPTS entry carries that attempt's executions, side effects marked."""
+    from cogno_anima.types import ToolExecution
+
+    # DIFFERENT tools per attempt, and that is the test's whole discriminating power: the
+    # review MUTATION-PROVED that with identical per-attempt tools, an implementation that
+    # backfills every entry with the LAST attempt's tools — the exact stale-ego_result bug
+    # class this fix targets, re-manifested inside the fix — stayed green.
+    wrong = ToolExecution(tool="confirm_appointment", arguments={"appointment_id": "e4d1a201"},
+                          result="Appointment e4d1a201 is now CONFIRMED.", ok=True,
+                          side_effect=True)
+    right = ToolExecution(tool="list_appointments", arguments={},
+                          result="No PENDING appointments found.", ok=True, side_effect=False)
+    sup = FakeSuperego(approve=False, approve_after=2, critique="wrong rows")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[wrong], [right]]), superego=sup)
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3),
+                              dispatcher=dispatcher)
+    attempts = ctx.metadata["judge_attempts"]
+    assert [a["approved"] for a in attempts] == [False, True]
+    rejected = attempts[0]["tools"]
+    assert [t["tool"] for t in rejected] == ["confirm_appointment"], \
+        "attempt 1 must carry ITS OWN write — not a backfill of the final attempt"
+    assert rejected[0]["side_effect"] is True and rejected[0]["ok"] is True
+    assert "e4d1a201" in rejected[0]["args"]          # WHICH row — the point of keeping args
+    assert [t["tool"] for t in attempts[1]["tools"]] == ["list_appointments"], \
+        "attempt 2 must carry attempt 2's tools — the entries are a per-attempt diff"
+
+
+async def test_a_tools_result_and_args_are_truncated_in_the_record(
+        stub_embedder, stub_backend, dispatcher):
+    """Same rule as the critique: this rides in metadata the host persists, and a tool result
+    is unbounded model-facing prose while arguments can embed the user's own text."""
+    from cogno_anima.types import ToolExecution
+
+    from cogno_soma.pipeline import _TOOL_ARGS_CHARS, _TOOL_RESULT_CHARS
+
+    huge = ToolExecution(tool="notify_user",
+                         arguments={"message": "x" * (_TOOL_ARGS_CHARS * 3)},
+                         result="y" * (_TOOL_RESULT_CHARS * 3), ok=True, side_effect=True)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[huge]),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]["tools"][0]
+    # o corte carrega o MARCADOR: JSON cortado sem sinal se apresenta como inteiro-porém-
+    # quebrado, e o leitor não distingue truncamento de corrupção
+    assert rec["result"].endswith("…") and len(rec["result"]) == _TOOL_RESULT_CHARS + 1
+    assert rec["args"].endswith("…") and len(rec["args"]) == _TOOL_ARGS_CHARS + 1
+
+
+async def test_a_blocked_call_keeps_BOTH_its_error_and_its_prose(
+        stub_embedder, stub_backend, dispatcher):
+    """`result or error` derrubava a taxonomia do erro quando os dois existem — e as execuções
+    que a anima SINTETIZA (blocked_retry / duplicate) preenchem os dois: o rótulo curto no
+    `error` e a prosa que vai ao modelo no `result`. Quem lê a evidência quer os dois."""
+    from cogno_anima.types import ToolExecution
+
+    blocked = ToolExecution(tool="confirm_appointment", arguments={}, ok=False,
+                            error="blocked_retry",
+                            result="[BLOCKED] 'confirm_appointment' already FAILED.")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[blocked]),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]["tools"][0]
+    assert "blocked_retry" in rec["result"] and "[BLOCKED]" in rec["result"]
+
+
+async def test_a_value_whose_str_raises_does_not_kill_the_turn(
+        stub_embedder, stub_backend, dispatcher):
+    """`default=str` fecha só um dos caminhos de raise do json.dumps. O do review (chave de
+    dict não-string) foi REFUTADO medindo: o pydantic do ToolExecution recusa a chave na
+    CONSTRUÇÃO, então ela nunca chega ao dumps. O caminho residual real é pelo VALOR — o
+    `arguments` é dict[str, Any], um Any aceita objeto arbitrário, e `default=str` chama
+    str(obj), que pode levantar. O registro inteiro é embrulhado: entrada degradada com
+    `tools_error` em vez de turno morto."""
+    from cogno_anima.types import ToolExecution
+
+    class Cursed:
+        def __str__(self):
+            raise RuntimeError("str() explode")
+
+    odd = ToolExecution(tool="book_appointment",
+                        arguments={"when": Cursed()},
+                        result="ok", ok=True, side_effect=True)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[odd]),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]
+    assert rec["tools"] == [] and rec["tools_error"] == "RuntimeError"
+
+
+async def test_the_tools_list_is_capped_and_the_overflow_counted(
+        stub_embedder, stub_backend, dispatcher):
+    """Os cortes por campo limitavam cada entrada; nada limitava a LISTA — e o teto real não é
+    o max_steps default: plano premium injeta ego_max_steps=25, chamadas por passo são
+    ilimitadas, e bloqueadas/duplicadas também são registradas (pior caso medido no review:
+    ~375 entradas num turno). O excedente é CONTADO, nunca silencioso."""
+    from cogno_anima.types import ToolExecution
+
+    from cogno_soma.pipeline import _TOOLS_PER_ATTEMPT
+
+    many = [ToolExecution(tool=f"t{i}", arguments={}, result="ok", ok=True, side_effect=False)
+            for i in range(_TOOLS_PER_ATTEMPT + 5)]
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[many]),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]
+    assert len(rec["tools"]) == _TOOLS_PER_ATTEMPT
+    assert rec["tools_dropped"] == 5
+
+
+async def test_a_non_json_argument_does_not_kill_the_turn_to_record_telemetry(
+        stub_embedder, stub_backend, dispatcher):
+    """The record runs inside the PRODUCTION correction loop. The args dict usually comes from
+    model JSON, but a host-injected value (RBAC pinning, a resolved date) is not guaranteed
+    serializable — and telemetry must never be the reason a turn dies. Found by probing the
+    diff itself: `json.dumps({"when": date(...)})` raises TypeError."""
+    import datetime
+
+    from cogno_anima.types import ToolExecution
+
+    odd = ToolExecution(tool="book_appointment",
+                        arguments={"when": datetime.date(2026, 8, 20)},
+                        result="ok", ok=True, side_effect=True)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[odd]),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]["tools"][0]
+    assert "2026-08-20" in rec["args"]           # gravado como string, turno vivo
+
+
 async def test_a_long_critique_is_truncated_before_it_rides_on_the_context(
         stub_embedder, stub_backend, dispatcher):
     """This metadata is persisted by the host. A judge critique is model prose with no length

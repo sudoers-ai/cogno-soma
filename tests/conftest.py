@@ -24,6 +24,7 @@ from cogno_anima.types import (
     StageMetrics,
     SuperegoResult,
     ToolResult,
+    EgoStep,
 )
 
 
@@ -114,17 +115,35 @@ class FakeID:
 
 
 class FakeEgo:
-    def __init__(self, *, calls: Optional[list] = None) -> None:
+    def __init__(self, *, calls: Optional[list] = None,
+                 tool_calls: Optional[list] = None) -> None:
         self._calls = calls
+        # ToolExecutions the fake "executes". A FLAT list runs the same tools every attempt; a
+        # LIST OF LISTS runs entry N on invocation N (clamped to the last). The second form
+        # exists because the review MUTATION-PROVED the first insufficient: an implementation
+        # that backfills every JUDGE_ATTEMPTS entry with the LAST attempt's tools — the exact
+        # stale-ego_result bug class the fix targets — passed every test, since identical
+        # per-attempt tools make "per attempt" and "last, copied" indistinguishable.
+        self._tool_calls = tool_calls
         self.invocations = 0
         self.last_system_prompt: Optional[str] = None
+
+    def _tools_for(self, invocation: int) -> list:
+        tc = self._tool_calls
+        if not tc:
+            return []
+        if isinstance(tc[0], list):
+            return list(tc[min(invocation - 1, len(tc) - 1)])
+        return list(tc)
 
     async def process(self, ctx, backend, dispatcher, *, system_prompt):
         self.invocations += 1
         self.last_system_prompt = system_prompt
         if self._calls is not None:
             self._calls.append("ego")
-        ctx.ego_result = EgoResult(metrics=metrics("ego"))
+        tools = self._tools_for(self.invocations)
+        steps = [EgoStep(index=0, path="native", assistant_text="", tool_calls=tools)]             if tools else []
+        ctx.ego_result = EgoResult(steps=steps, metrics=metrics("ego"))
         return ctx
 
 
