@@ -1,6 +1,9 @@
 """Control-flow tests for ``Pipeline.run_turn`` using fake stages."""
 
 
+import cogno_anima.metakeys as mk
+from cogno_anima.types import committed_this_turn
+
 from cogno_soma import Pipeline, TurnConfig
 
 from cogno_anima.types import SuperegoResult
@@ -657,6 +660,165 @@ async def test_a_value_whose_str_raises_does_not_kill_the_turn(
                               dispatcher=dispatcher)
     rec = ctx.metadata["judge_attempts"][0]
     assert rec["tools"] == [] and rec["tools_error"] == "RuntimeError"
+
+
+async def test_a_write_from_a_REJECTED_attempt_STILL_HANDS_OFF(
+        stub_embedder, stub_backend, dispatcher):
+    """A forma do doctor-notify, do lado da POLÍTICA do turno.
+
+    Tentativa 1 confirma três linhas erradas (`side_effect` + `ok`), o juiz reprova; tentativa 2
+    só LÊ e é reprovada também. O `ctx.ego_result` é SUBSTITUÍDO a cada retry, então o turno
+    saía do laço parecendo que não executou nada — e ia para `needs_clarification`, com a voz
+    recebendo "NOTHING was committed" como REGRA DURA. O banco tinha três linhas mudadas que
+    nenhum juiz aprovou, e o usuário era informado do contrário.
+
+    Fail-CLOSED: escrita não aprovada → humano."""
+    from cogno_anima.types import ToolExecution
+
+    wrote = ToolExecution(tool="confirm_appointment", arguments={"appointment_id": "a1"},
+                          result="Appointment a1 is now CONFIRMED.", ok=True, side_effect=True)
+    only_read = ToolExecution(tool="list_appointments", arguments={},
+                              result="No PENDING appointments.", ok=True, side_effect=False)
+    sup = FakeSuperego(approve=False, critique="confirmed rows that were not pending")
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[wrote], [only_read]]), superego=sup)
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+
+    assert ctx.stop_reason == "human_handoff"
+    assert ctx.needs_handoff is True
+    # …e a voz NÃO roda: não há continuação verdadeira a escrever sobre uma escrita que
+    # ninguém aprovou (é o `handoff_message` do host que sai).
+    assert ctx.superego_result is None
+    assert mk.VOICE_CORRECTION not in ctx.metadata, \
+        "a voz não pode receber 'nada foi executado' quando ALGO foi"
+
+
+async def test_a_host_seeded_garbage_ledger_does_not_kill_the_turn(
+        stub_embedder, stub_backend, dispatcher):
+    """`ctx.metadata` é do HOST. `setdefault(chave, []).append(...)` sobre um valor que não é
+    lista levanta AttributeError DE DENTRO do laço de correção de produção, onde só
+    `StopPipeline` é capturada — um turno inteiro perdido para escrever telemetria."""
+    ctx0 = _ctx()
+    ctx0.metadata[mk.JUDGE_ATTEMPTS] = 3          # o host semeou lixo
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(),
+                     superego=FakeSuperego(approve=True))
+    ctx = await pipe.run_turn(ctx0, _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    assert isinstance(ctx.metadata[mk.JUDGE_ATTEMPTS], list)
+    assert ctx.superego_result is not None        # o turno chegou ao fim
+
+
+async def test_a_gate_B_hold_does_not_swallow_the_writes_that_preceded_it(
+        stub_embedder, stub_backend, dispatcher):
+    """O `break` do gate-B pulava o juiz E o registro. Uma tentativa que EXECUTOU escritas e
+    só então segurou uma chamada destrutiva não deixava rastro nenhum — buraco no ledger
+    exatamente onde havia escrita. As execuções entram no turno ANTES de qualquer saída."""
+    from cogno_anima.types import EgoResult, EgoStep, StageMetrics, ToolExecution
+
+    wrote = ToolExecution(tool="cancel_appointment", arguments={"appointment_id": "a1"},
+                          result="canceled", ok=True, side_effect=True)
+    held = ToolExecution(tool="delete_patient", arguments={"id": "p9"})
+
+    class _HoldingEgo:
+        async def process(self, ctx, backend, dispatcher, *, system_prompt):
+            ctx.ego_result = EgoResult(
+                steps=[EgoStep(index=0, path="native", assistant_text="",
+                               tool_calls=[wrote])],
+                pending_confirmation=[held],
+                metrics=StageMetrics(stage="ego", elapsed_ms=0.0, tokens_in=0, tokens_out=0,
+                                     model="fake"))
+            return ctx
+
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_HoldingEgo(),
+                     superego=FakeSuperego(approve=True))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+    assert [t.tool for t in ctx.turn_executions] == ["cancel_appointment"]
+    assert committed_this_turn(ctx) is True
+
+
+async def test_a_turn_that_only_READ_still_keeps_the_conversation_alive(
+        stub_embedder, stub_backend, dispatcher):
+    """Braço-controle do teste acima — sem ele, "sempre handoff" passaria nos dois.
+
+    Nada foi commitado em tentativa NENHUMA: encerrar numa pessoa seria um beco sem saída onde
+    a continuação verdadeira ("achei seu horário — mudo para as 11h?") resolve."""
+    from cogno_anima.types import ToolExecution
+
+    read = ToolExecution(tool="list_appointments", arguments={}, result="3 rows", ok=True,
+                         side_effect=False)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[read], [read]]),
+                     superego=FakeSuperego(approve=False, critique="did not answer"))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+
+    assert ctx.stop_reason == "needs_clarification"
+    assert not getattr(ctx, "needs_handoff", False)
+    assert ctx.metadata[mk.VOICE_CORRECTION]["kind"] == "not_executed"
+    assert ctx.superego_result is not None      # a voz escreve a continuação
+
+
+async def test_a_FAILED_write_from_a_rejected_attempt_is_not_a_commit(
+        stub_embedder, stub_backend, dispatcher):
+    """`side_effect` viaja mesmo quando a chamada falhou (é por NOME da tool). Uma mutação que
+    FALHOU não mudou nada — encerrar num humano por causa dela é o falso-positivo simétrico."""
+    from cogno_anima.types import ToolExecution
+
+    failed = ToolExecution(tool="book_appointment", arguments={"when": "9h"}, result="",
+                           error="slot taken", ok=False, side_effect=True)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[failed], [failed]]),
+                     superego=FakeSuperego(approve=False, critique="not booked"))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+
+    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.superego_result is not None
+
+
+async def test_the_committed_bit_does_not_ride_the_DISPLAY_path(
+        stub_embedder, stub_backend, dispatcher):
+    """O bit que roteia o turno é calculado sobre a lista INTEIRA e fora do try.
+
+    Se ele viesse da lista exibida, duas coisas o apagariam sem ninguém notar: o teto por
+    tentativa (a escrita cai fora do corte) e um `arguments` que não serializa (a entrada
+    degrada para `tools: []`). Nos dois casos o turno deixaria de escalar — falhar para o lado
+    perigoso por causa do caminho de EXIBIÇÃO."""
+    from cogno_anima.types import ToolExecution
+
+    from cogno_soma.pipeline import _TOOLS_PER_ATTEMPT, _attempt_tools
+
+    class Cursed:
+        def __str__(self):
+            raise RuntimeError("str() explode")
+
+    reads = [ToolExecution(tool=f"read{i}", arguments={}, result="ok", ok=True,
+                           side_effect=False) for i in range(_TOOLS_PER_ATTEMPT)]
+    write = ToolExecution(tool="confirm_appointment", arguments={"appointment_id": "a1"},
+                          result="now CONFIRMED", ok=True, side_effect=True)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[*reads, write], [reads[0]]]),
+                     superego=FakeSuperego(approve=False, critique="x"))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
+                              dispatcher=dispatcher)
+    entry = ctx.metadata[mk.JUDGE_ATTEMPTS][0]
+    assert entry["tools_dropped"] == 1                      # a escrita ficou fora da exibição
+    assert not any(t["side_effect"] for t in entry["tools"])
+    assert entry["committed"] is True                       # …e mesmo assim o turno escala
+    assert ctx.stop_reason == "human_handoff"
+
+    # …e a entrada DEGRADADA também mantém o bit
+    cursed = ToolExecution(tool="confirm_appointment", arguments={"when": Cursed()},
+                           result="now CONFIRMED", ok=True, side_effect=True)
+
+    class _Ego:
+        tools_executed = [cursed]
+
+    degraded = _attempt_tools(_Ego())
+    assert degraded["tools"] == [] and degraded["tools_error"] == "RuntimeError"
+    assert degraded["committed"] is True
 
 
 async def test_the_tools_list_is_capped_and_the_overflow_counted(

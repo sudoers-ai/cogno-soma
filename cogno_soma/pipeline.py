@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from cogno_anima import metakeys as mk
+from cogno_anima.types import committed_this_turn
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
@@ -75,15 +76,24 @@ def _outcome(exec_) -> str:
 
 
 def _attempt_tools(ego_result) -> dict:
-    """The executions of ONE attempt, bounded, as {"tools": [...]} (+ error/overflow keys).
+    """One attempt's executions: the POLICY bit, then the bounded display list.
 
-    Wrapped whole because this runs inside the PRODUCTION correction loop and telemetry must
-    never be the reason a turn dies. `default=str` closes only one of json.dumps's raise
-    paths — a NON-STRING dict key raises TypeError regardless (verified), and a __str__ that
-    itself raises unwinds too. A degraded entry beats a dead turn."""
+    `committed` is deliberately computed FIRST, outside the try, over the FULL list: it is the
+    only field this turn's routing depends on (see `committed_this_turn`), so it must not inherit
+    the display path's failure modes — not the per-attempt cap, not the truncation, not a
+    `json.dumps` that raises. Reading `t.side_effect`/`t.ok` cannot raise; serializing the
+    arguments can.
+
+    The rest is wrapped whole because this runs inside the PRODUCTION correction loop and
+    telemetry must never be the reason a turn dies. `default=str` closes only one of
+    json.dumps's raise paths — a `__str__` that itself raises unwinds too. A degraded entry
+    beats a dead turn."""
+    execs = list(ego_result.tools_executed) if ego_result else []
+    # Per-attempt, for the reader of the evidence. The TURN's answer comes from
+    # `committed_this_turn(ctx)` over `turn_executions` — one definition, in anima.
+    committed = any(t.side_effect and t.ok for t in execs)
     try:
-        execs = ego_result.tools_executed if ego_result else []
-        entry: dict = {"tools": [
+        entry: dict = {"committed": committed, "tools": [
             {"tool": t.tool,
              "args": _cut(json.dumps(t.arguments or {}, ensure_ascii=False, default=str),
                           _TOOL_ARGS_CHARS),
@@ -95,7 +105,9 @@ def _attempt_tools(ego_result) -> dict:
             entry["tools_dropped"] = len(execs) - _TOOLS_PER_ATTEMPT
         return entry
     except Exception as exc:  # noqa: BLE001 — degraded telemetry, never a dead turn
-        return {"tools": [], "tools_error": type(exc).__name__}
+        # The display list is what degrades. `committed` survives — a turn must never route
+        # on a missing bit because a tool argument would not serialize.
+        return {"committed": committed, "tools": [], "tools_error": type(exc).__name__}
 
 
 logger = logging.getLogger(__name__)
@@ -185,22 +197,12 @@ class Pipeline:
                 await self._fire(hooks.after_ego, ctx)
                 if judge is not None and not judge.approved:
                     ego = ctx.ego_result
-                    # A COMMITTED side effect requires the mutating call to have SUCCEEDED
-                    # (ok) — a mutation that FAILED (e.g. the confirmed slot was taken between
-                    # propose and commit) changed nothing, so it is not a commit to misreport.
-                    #
-                    # KNOWN HOLE (review 2026-08-20): this reads only the FINAL attempt's
-                    # tools_executed, so a successful-but-rejected mutation from an EARLIER
-                    # attempt is invisible here — the doctor-notify shape (attempt 1 commits
-                    # three wrong confirms, judge rejects, attempt 2 only reads) takes
-                    # needs_clarification, not the handoff the promise below implies. The
-                    # per-attempt record (JUDGE_ATTEMPTS, this same changeset) now carries the
-                    # data to fix it, but deriving turn POLICY from it changes stop_reason on
-                    # real turns and needs its own measured pass — visibility first, policy
-                    # second. Until then the fail-closed promise holds only for the final
-                    # attempt.
-                    committed = ego is not None and any(
-                        t.side_effect and t.ok for t in ego.tools_executed)
+                    # ACROSS EVERY ATTEMPT, not just the last one — `ctx.ego_result` is
+                    # replaced on each retry, and a write the judge refused does not un-happen
+                    # because a later attempt only read. The definition of a commit lives in
+                    # anima, beside the type it reads: three repos must agree on it, and this
+                    # orchestrator is only one of six places that were getting it wrong.
+                    committed = committed_this_turn(ctx)
                     if ego is not None and not committed:
                         # The judge rejected, but nothing was actually COMMITTED — the EGO only
                         # READ, or every mutating call failed. Rather than dead-end in a human
@@ -209,7 +211,10 @@ class Pipeline:
                         # in the trace (e.g. "I found your appointment — change it to 11:00?"
                         # or "that slot was just taken — want another?"). Fail-closed is
                         # preserved: a SUCCESSFUL-but-rejected mutation still hands off (never
-                        # voice an unverified commit as done). The HOST owns the escalation
+                        # voice an unverified commit as done) — and since `committed_this_turn`
+                        # reads every attempt, the "NOTHING was committed" the voice renders
+                        # below as a HARD RULE is now TRUE of the whole turn, not just of the
+                        # attempt that happened to be last. The HOST owns the escalation
                         # policy on this signal (force a real handoff after N).
                         ctx.stop_reason = "needs_clarification"
                         # The voice must know the execution was rejected — otherwise it only
@@ -227,8 +232,14 @@ class Pipeline:
                         # apart — and so the HOST can act on an unverified turn (it could
                         # previously only infer `needs_clarification`, which a legitimate
                         # mid-flow question raises too).
-                        kind = ("unverified_claim" if not ego.tools_executed
-                                else "not_executed")
+                        # …e POR TURNO pela mesma razão do `committed` acima: a tentativa
+                        # sobrevivente pode voltar com trace VAZIO (a re-chamada dela é
+                        # bloqueada por duplicata — rotineiro), e ler isso como "nada executou"
+                        # marcaria como AFIRMAÇÃO NÃO VERIFICADA um turno que reuniu dados de
+                        # verdade: a voz DESCARTA o rascunho, o host mede como unverified_claim
+                        # e, com a flag ligada, encerra num humano.
+                        ran = ctx.turn_executions or ego.tools_executed
+                        kind = "unverified_claim" if not ran else "not_executed"
                         ctx.metadata[mk.VOICE_CORRECTION] = {
                             "reason": (judge.critique or "").strip() or
                                       "the execution did not accomplish the user's goal",
@@ -281,6 +292,13 @@ class Pipeline:
             # intentionally incomplete — so skip the judge: it would false-reject "booking not
             # completed" and burn a wasteful EGO retry on EVERY confirmation turn (measured:
             # the gpt-4o-mini judge rejects the [PENDING CONFIRMATION] hold 3/3). Voice grounds it.
+            # O que ESTA tentativa executou entra no turno agora — antes de qualquer saída do
+            # laço. O `break` do gate-B abaixo pulava o registro junto com o juiz, e uma
+            # tentativa que EXECUTOU escritas e só então segurou uma chamada destrutiva não
+            # deixava rastro nenhum: o ledger que este changeset promoveu a "a autoridade"
+            # tinha um buraco exatamente onde havia escrita.
+            if ctx.ego_result:
+                ctx.turn_executions.extend(ctx.ego_result.tools_executed)
             if ctx.ego_result and ctx.ego_result.pending_confirmation:
                 judge = SuperegoResult(approved=True, metrics=_zero_metrics())
                 break
@@ -300,7 +318,14 @@ class Pipeline:
             # shipped hiding three commits. The critiques became data in #30; this closes the
             # other eye. Rollback / judge-aware voicing remain deliberately OUT of scope: this
             # makes the writes VISIBLE, it does not undo them.
-            ctx.metadata.setdefault(mk.JUDGE_ATTEMPTS, []).append({
+            # `setdefault(...).append(...)` mata o turno se o host tiver semeado a chave com
+            # algo que não é lista (AttributeError sai do laço de correção de PRODUÇÃO, e só
+            # StopPipeline é capturada). Telemetria nunca pode ser o motivo de perder um turno.
+            ledger = ctx.metadata.get(mk.JUDGE_ATTEMPTS)
+            if not isinstance(ledger, list):
+                ledger = []
+                ctx.metadata[mk.JUDGE_ATTEMPTS] = ledger
+            ledger.append({
                 "attempt": attempt,
                 "approved": bool(judge.approved),
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
