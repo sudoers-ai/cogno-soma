@@ -49,6 +49,41 @@ async def test_carry_threads_id_state_and_goal(stub_embedder, stub_backend):
     assert st["carry"]["active_domains"] == ["finance"]
 
 
+async def test_the_judge_ledger_does_NOT_survive_into_the_next_turn(
+        stub_embedder, stub_backend):
+    """Regressão de PESO, não de asseio: desde que `committed` roteia o turno, uma entrada
+    vazada de um turno anterior encerraria um turno INOCENTE num humano.
+
+    O `_thread_forward` remonta o carry como lista-branca de 4 chaves nomeadas, então
+    `JUDGE_ATTEMPTS` não atravessa — e o `setdefault(...).append(...)` do laço de correção
+    ACUMULARIA na lista antiga se atravessasse. Este teste é o que impede alguém de "só
+    passar o metadata inteiro adiante" mais tarde."""
+    import cogno_anima.metakeys as mk
+    from cogno_anima.types import ToolExecution
+
+    write = ToolExecution(tool="confirm_appointment", arguments={"appointment_id": "a1"},
+                          result="now CONFIRMED", ok=True, side_effect=True)
+    pipe = Pipeline(embedder=stub_embedder, noumeno=FakeNoumeno(), ner=FakeNER(),
+                    id_stage=FakeID(route="EGO"), ego=FakeEgo(tool_calls=[write]),
+                    superego=FakeSuperego(approve=False))
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    first = await sess.run("confirma tudo")
+    assert first.stop_reason == "human_handoff"          # escreveu e ninguém aprovou
+    first_n = len(first.metadata[mk.JUDGE_ATTEMPTS])
+    assert first_n >= 1
+
+    assert mk.JUDGE_ATTEMPTS not in sess.state["carry"]
+
+    # turno 2: mesma sessão, agora só LEITURA e aprovado — não pode herdar o handoff
+    pipe._ego = FakeEgo()
+    pipe._superego = FakeSuperego(approve=True)
+    second = await sess.run("e amanhã, como está?")
+    assert second.stop_reason != "human_handoff"
+    assert len(second.metadata.get(mk.JUDGE_ATTEMPTS) or []) < first_n + 1, \
+        "o registro do turno anterior não pode acumular neste"
+    assert not any(a.get("committed") for a in second.metadata.get(mk.JUDGE_ATTEMPTS) or [])
+
+
 async def test_history_feeds_last_rewritten(stub_embedder, stub_backend):
     captured: list[str] = []
     pipe = _pipe(stub_embedder, rewritten="REWRITTEN-1")
