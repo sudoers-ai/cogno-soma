@@ -922,22 +922,89 @@ async def test_seq_recovers_the_true_call_order_that_stage_metrics_loses(
     assert raw != stages, "se a lista crua já estivesse em ordem, o seq seria supérfluo"
 
 
-async def test_the_two_ego_attempts_carry_DIFFERENT_prompt_shas(stub_embedder, stub_backend):
-    """The retry is handed a correction block the first attempt never saw, so the two calls
-    are different prompts and must not share a label — a label that collapses them makes the
-    whole "which text worked" question unanswerable on exactly the turns that have an answer."""
+async def test_the_two_ego_attempts_SHARE_a_configuration_and_differ_by_attempt(
+        stub_embedder, stub_backend):
+    """`prompt_sha` labels a CONFIGURATION, not a call.
+
+    The first cut of this hashed the injected context and the correction block too, and the
+    test here asserted the two attempts got DIFFERENT shas. That was wrong, and storing the
+    text is what exposed it: with the context in the digest, nearly every turn gets a unique
+    sha — and a label unique per turn groups nothing, which is the entire purpose of having
+    one. It would also have carried transcript and memories into a text store.
+
+    So the two attempts of a retried turn share a sha, and `attempt` is what tells them apart —
+    which is the axis that actually carries that difference.
+    """
     pipe = Pipeline(
         embedder=stub_embedder,
         noumeno=FakeNoumeno(), ner=FakeNER(), id_stage=FakeID(route="EGO"),
         ego=FakeEgo(), superego=FakeSuperego(approve_after=2))
-    cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend, ego_prompt="x",
-                     limits_prompt="limits", voice_prompt="voice", max_corrections=3)
-    ctx = await pipe.run_turn(_ctx("registra 150"), cfg,
-                              dispatcher=RecordingDispatcher())
+    cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend,
+                     ego_prompt="Você é o Contador.", limits_prompt="limits",
+                     voice_prompt="voice", max_corrections=3)
+    ctx = await pipe.run_turn(_ctx("registra 150"), cfg, dispatcher=RecordingDispatcher())
 
-    shas = [m.prompt_sha for m in ctx.stage_metrics if m.stage == "ego"]
-    assert len(shas) == 2 and all(shas), "as duas tentativas têm rótulo"
-    assert shas[0] != shas[1], "e são rótulos DIFERENTES: o bloco de correção mudou o texto"
+    egos = [(m.attempt, m.prompt_sha) for m in ctx.stage_metrics if m.stage == "ego"]
+    assert len(egos) == 2
+    assert {a for a, _ in egos} == {1, 2}, "as tentativas se distinguem pelo attempt"
+    assert egos[0][1] == egos[1][1] != "", "…e COMPARTILHAM a configuração"
+
+
+async def test_the_sha_does_not_move_when_only_the_CONTEXT_changes(
+        stub_embedder, stub_backend):
+    """The property that makes it a usable label: same persona, different contact context →
+    same sha, so outcomes across turns are groupable by configuration.
+
+    Mutation: put `EGO_CONTEXT` back in the digest and this dies — which is precisely the
+    first cut, and precisely why it had to go.
+    """
+    def run(user_text, context):
+        pipe = Pipeline(embedder=stub_embedder, noumeno=FakeNoumeno(), ner=FakeNER(),
+                        id_stage=FakeID(route="EGO"), ego=FakeEgo(), superego=FakeSuperego())
+        cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend,
+                         ego_prompt="Você é o Contador.", voice_prompt="voice")
+        c = _ctx(user_text)
+        c.metadata[mk.EGO_CONTEXT] = context
+        return pipe.run_turn(c, cfg, dispatcher=RecordingDispatcher())
+
+    a = await run("registra 150", "[MEMORIES]\nO nome do contato é Marina.")
+    b = await run("registra 80", "[MEMORIES]\nO nome do contato é João, telefone 11999998888.")
+    sha_a = next(m.prompt_sha for m in a.stage_metrics if m.stage == "ego")
+    sha_b = next(m.prompt_sha for m in b.stage_metrics if m.stage == "ego")
+    assert sha_a == sha_b != "", "mesma persona, contextos diferentes → mesmo rótulo"
+
+
+async def test_the_published_text_recomputes_to_its_own_sha_and_carries_no_CONTEXT(
+        stub_embedder, stub_backend):
+    """The store is safe by CONSTRUCTION, not by filtering — the context is never digested, so
+    it is never published. And the text must recompute to its key, or the store is holding
+    something other than what the label stands for.
+    """
+    import hashlib
+
+    pipe = Pipeline(embedder=stub_embedder, noumeno=FakeNoumeno(), ner=FakeNER(),
+                    id_stage=FakeID(route="EGO"), ego=FakeEgo(), superego=FakeSuperego())
+    # `limits_prompt` matters to the fixture, not just to the run: the JUDGE is the only call
+    # that publishes MORE THAN ONE part (its limits text plus the criteria marker), so it is
+    # the only one where the join separator can differ at all. Without it every published text
+    # is a single part, `"\n".join([x]) == " | ".join([x]) == x`, and a mutation that changes
+    # the separator passes — it did, on the first version of this test.
+    cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend,
+                     ego_prompt="Você é o Contador.", voice_prompt="Fale como o Contador.",
+                     limits_prompt="Nunca invente um valor.")
+    ctx = _ctx("registra 150")
+    ctx.metadata[mk.EGO_CONTEXT] = "[MEMORIES]\nMarina, CPF 390.533.447-05, (11) 99999-8888"
+    ctx = await pipe.run_turn(ctx, cfg, dispatcher=RecordingDispatcher())
+
+    published = ctx.metadata[mk.PROMPT_TEXTS]
+    assert {e["kind"] for e in published.values()} >= {"ego", "voice", "judge"}
+    multi = [e for e in published.values() if e["kind"] == "judge"]
+    assert multi and "\n" in multi[0]["text"], "o juiz publica DUAS partes — é o caso que discrimina"
+    for sha, entry in published.items():
+        assert hashlib.sha256(entry["text"].encode()).hexdigest()[:12] == sha, (
+            "o texto guardado tem de recomputar para a própria chave")
+        for leak in ("Marina", "390.533.447-05", "99999-8888", "MEMORIES"):
+            assert leak not in entry["text"], f"{leak!r} vazou para o armazém de prompts"
 
 
 async def test_a_stage_with_no_host_supplied_prompt_has_an_EMPTY_sha(
