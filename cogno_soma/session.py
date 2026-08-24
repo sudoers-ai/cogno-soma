@@ -57,13 +57,28 @@ _SOURCES_INSTRUCTION = (
 #
 # VOLATILE facts stay barred either way. What changes is only whether the recap may be used
 # to know WHERE THE CONVERSATION IS — never to restate a figure or a status as current.
+#
+# **Not restarting is not enough — 2026-08-24.** Continuing the thread and merely answering the
+# greeting are the same reply when the contact's whole message is "oi, tudo bem?": there is
+# nothing to continue FROM. Measured in the host's `gap_bench` across six model groups, the
+# settled-matter case failed the same sub-check in all six — the model greeted back politely,
+# volunteered nothing, and the contact was left not knowing whether the clinic still had their
+# appointment. The product decision is that it should say where things stand. Note the honest
+# form, because the two rules meet here: the appointment's date and time ARE volatile, so the
+# instruction asks for a fresh read when a tool can give one and for ATTRIBUTION ("pelo que
+# ficou combinado") when none can — bring the matter forward, never assert a stale figure.
 _SOURCES_INSTRUCTION_NO_TRANSCRIPT = (
     "VOLATILE facts — dates, times, availability, amounts, statuses, anything that changes — "
     "must come from THIS turn's tool results or the user's message; never restate them from "
     "the sections below as if they were current. There is no verbatim transcript this turn "
     "(the conversation paused), so EARLIER CONTEXT is your ONLY account of what was already "
     "discussed: use it to continue the thread — what was asked, what was agreed, what was "
-    "left open — and do NOT restart the conversation or re-introduce yourself. MEMORIES hold "
+    "left open — and do NOT restart the conversation or re-introduce yourself. If the contact "
+    "comes back with a message that carries nothing of its own (a greeting, 'voltei', 'sim'), "
+    "say where things stand instead of only greeting back: name the matter that was left "
+    "open or already agreed. Confirm it against THIS turn's tool results whenever a tool can "
+    "check it; when none can, attribute it to what was agreed ('pelo que ficou combinado') "
+    "rather than asserting it as current. MEMORIES hold "
     "DURABLE facts about this contact and this relationship (their name, who referred them, "
     "their business, their preferences, operator notes): you MAY state those — they were "
     "saved to be used, and they outrank anything you previously guessed or denied in this "

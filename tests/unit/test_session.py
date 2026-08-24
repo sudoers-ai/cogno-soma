@@ -405,6 +405,65 @@ async def test_with_no_verbatim_window_the_recap_is_the_THREAD_not_background(
     assert "EARLIER CONTEXT / KNOWLEDGE GRAPH are background" not in src
 
 
+async def test_a_contentless_return_message_asks_for_WHERE_THINGS_STAND(
+        stub_embedder, stub_backend):
+    """Not restarting the conversation is not the same as continuing it.
+
+    When the contact's whole message is "oi, tudo bem?" there is nothing to continue FROM, so
+    "do NOT restart" and "answer the greeting" produce the identical reply — a polite hello
+    that volunteers nothing, leaving a contact who came back after days not knowing whether
+    the clinic still has their appointment. Measured in the host's `gap_bench` across six
+    model groups (2026-08-22): the settled-matter case failed the same sub-check in all six,
+    deterministically, which is not what noise looks like.
+
+    The two rules meet here and the wording has to respect both: an appointment's date and
+    time ARE volatile. So the instruction asks for a fresh read when a tool can give one, and
+    for ATTRIBUTION when none can — bring the matter forward, never assert a stale figure.
+
+    Mutation: drop either half of the clause and this dies."""
+    captured: list[str] = []
+    pipe = _pipe(stub_embedder, route="EGO")
+    orig = pipe._ego.process
+
+    async def spy(ctx, backend, dispatcher, *, system_prompt):
+        captured.append(str(ctx.metadata.get("ego_context", "")))
+        return await orig(ctx, backend, dispatcher, system_prompt=system_prompt)
+    pipe._ego.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("oi, tudo bem?",
+                   prior_summary="A consulta da Marina foi remarcada para 14/08 às 16h.")
+    src = captured[0]
+    assert "[RECENT CONVERSATION]" not in src, "premise: the burst window is empty"
+    assert "say where things stand instead of only greeting back" in src
+    assert "left open or already agreed" in src
+    # ...and the volatile bar is what keeps this from licensing a stale date.
+    assert "Confirm it against THIS turn's tool results" in src
+    assert "pelo que ficou combinado" in src
+
+
+async def test_the_stand_clause_does_NOT_reach_a_flowing_conversation(
+        stub_embedder, stub_backend):
+    """It rides the no-transcript wording only. With the thread right there in the window,
+    telling the model to announce where things stand every turn would turn each reply into a
+    status recap — and would do it from the recap, which is exactly the stale-figure path."""
+    captured: list[str] = []
+    pipe = _pipe(stub_embedder, route="EGO")
+    orig = pipe._ego.process
+
+    async def spy(ctx, backend, dispatcher, *, system_prompt):
+        captured.append(str(ctx.metadata.get("ego_context", "")))
+        return await orig(ctx, backend, dispatcher, system_prompt=system_prompt)
+    pipe._ego.process = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    await sess.run("bom dia")                                   # seeds the burst window
+    await sess.run("oi, tudo bem?", prior_summary="A consulta foi remarcada para 14/08.")
+    src = captured[-1]
+    assert "[RECENT CONVERSATION]" in src, "premise: the window carried forward"
+    assert "say where things stand instead of only greeting back" not in src
+
+
 async def test_once_the_conversation_IS_flowing_the_recap_goes_back_to_background(
         stub_embedder, stub_backend):
     """The other direction, and it must hold or the fix would promote a stale recap over the
