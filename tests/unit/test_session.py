@@ -442,6 +442,40 @@ async def test_a_contentless_return_message_asks_for_WHERE_THINGS_STAND(
     assert "pelo que ficou combinado" in src
 
 
+async def test_the_stand_clause_reaches_a_turn_where_the_EGO_NEVER_RUNS(
+        stub_embedder, stub_backend):
+    """The clause was written for "oi, tudo bem?" after days — and that turn is SOCIAL, so it
+    routes to the SUPEREGO and the EGO never executes.
+
+    The two tests above spy on ``ego_context`` with the route forced to EGO, which proves the
+    text is composed and proves nothing about the turn it exists for. If the block only
+    reached the executor, the whole change would be inert in exactly its own case. The other
+    half of the chain is already pinned in cogno-anima
+    (``test_voice_includes_injected_memory_context``: ``ego_context`` is rendered verbatim
+    into the voice prompt), so EGO_CONTEXT carrying the clause is what closes it.
+
+    Mutation: set EGO_CONTEXT only when the EGO route is taken and this dies."""
+    captured: list = []
+    pipe = _pipe(stub_embedder, route="SUPEREGO")
+    orig = pipe._superego.voice
+
+    async def spy(ctx, backend, *, voice_prompt):
+        captured.append(str((ctx.metadata or {}).get("ego_context", "")))
+        return await orig(ctx, backend, voice_prompt=voice_prompt)
+    pipe._superego.voice = spy
+
+    sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
+    ctx = await sess.run("oi, tudo bem?",
+                         prior_summary="A consulta da Marina foi remarcada para 14/08 às 16h.")
+
+    assert ctx.id_result.triad_route == "SUPEREGO", "premissa: o EGO não roda neste turno"
+    assert captured, "a voz foi chamada"
+    src = captured[0]
+    assert "[RECENT CONVERSATION]" not in src, "premissa: a janela verbatim está vazia"
+    assert "say where things stand instead of only greeting back" in src
+    assert "[EARLIER CONTEXT]" in src and "14/08" in src, "e o recap viaja junto"
+
+
 async def test_the_stand_clause_does_NOT_reach_a_flowing_conversation(
         stub_embedder, stub_backend):
     """It rides the no-transcript wording only. With the thread right there in the window,
