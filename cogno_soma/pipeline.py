@@ -20,7 +20,6 @@ that state for a multi-turn session.
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 import logging
@@ -84,85 +83,45 @@ def _outcome(exec_) -> str:
 # canonical slots is the LAST attempt; the one further down is the first). Nobody downstream
 # can recover the order by inference, because the information is not there. Here it is.
 #
-# `prompt_sha` digests ONLY the deployment-authored text handed to the call — the persona's
-# execution / voice / limits / scope prompt, plus flags that swap a whole criteria set. It is
-# a label for a CONFIGURATION, and two things follow from that, both deliberate:
+# `prompt_sha` labels the CONFIGURATION a call ran under. The digest is NOT computed here: by
+# the time a prompt reaches this layer it has been RENDERED, and the host substitutes the
+# contact's name and e-mail into the system/scope/limits/voice slots before handing them over
+# (`cogno_host.persona.render_slot` → `identity_context`). Digesting that would produce a
+# different sha per CONTACT — one row per conversation in a content-addressed store, which is
+# the opposite of the point — and any text stored behind it would carry a name and an e-mail
+# into a table the identity purge does not know about.
 #
-#   * The injected context (`EGO_CONTEXT`: transcript, memories, graph) is NOT in the digest.
-#     Putting it in makes the sha unique per turn — nearly every turn has a different context —
-#     and a label unique per turn groups nothing, which is the entire purpose. It also means
-#     the digested text is free of contact PII BY CONSTRUCTION, so publishing it for a host to
-#     store is safe structurally rather than by a test one hopes still holds.
-#   * The correction block is not in it either: the two EGO attempts of a retried turn share a
-#     configuration and are told apart by `attempt`, which is the axis that actually carries
-#     that difference. (First cut hashed both; it made every sha per-turn-unique and would
-#     have put memories into a text store. Found while designing the store, not by a test.)
+# So the host digests its TEMPLATES (where `{identity_label}` is literal and stable) and hands
+# the map down as `mk.PROMPT_SHAS`; this layer only says which slot each call used. The layer
+# that AUTHORS a text owns its identity; this one sequences.
 #
-# Twelve hex chars: this rides in a per-turn record, and a full digest buys collision headroom
-# nobody needs to distinguish a handful of prompt configurations.
+# First cut hashed the rendered text right here and claimed it was PII-free by construction.
+# It was PII by construction — found by asking a peer to refute it before the store existed,
+# which is the only reason it cost a revert instead of a migration.
 _SEQ_KEY = "_call_seq"          # private to this module; popped in `_finish`
-_SHA_CHARS = 12
 
 
-# One turn cannot legitimately use more than a handful of distinct prompts; the cap is a
-# runaway guard, not a policy. The per-text cap is generous because a persona prompt is
-# genuinely long and truncating it would defeat the point of storing it at all.
-_MAX_PROMPT_TEXTS = 16
-_MAX_PROMPT_CHARS = 64_000
-
-
-def _join(*parts: "Optional[str]") -> str:
-    """The ONE composition both the digest and the published text use — so the sha can be
-    recomputed from the stored text and shown to match. Two separators (one to hash, a prettier
-    one to store) would make that check impossible, which is the check that proves the store is
-    holding what the label claims."""
-    return "\n".join(p for p in parts if p)
-
-
-def _prompt_sha(*parts: "Optional[str]") -> str:
-    """Stable digest of the deployment-authored prompt. Empty when the call takes no
-    host-supplied text (NOUMENO/NER render their own templates; the ID calls no model at all) —
-    an empty sha says "nothing a deployment set", which is different from "not recorded"."""
-    joined = _join(*parts)
-    if not joined:
+def _sha_for(ctx, kind: str) -> str:
+    """The host's digest for this prompt slot, or "" when the host supplied none — an empty
+    sha says "unlabelled", never "no prompt". Total: a malformed map degrades to unlabelled
+    rather than killing a turn."""
+    shas = ctx.metadata.get(mk.PROMPT_SHAS)
+    if not isinstance(shas, dict):
         return ""
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:_SHA_CHARS]
+    value = shas.get(kind)
+    return value if isinstance(value, str) else ""
 
 
-def _publish(ctx, kind: str, *parts: "Optional[str]") -> str:
-    """Digest the prompt AND leave the text where a host can store it, keyed by that digest.
-
-    The sha alone labels a configuration; without the text nobody can read what the label
-    stands for, and "which text produced this outcome" stays merely groupable instead of
-    answerable. Publishing it here — in the layer that composed it — is what keeps the stored
-    text and the label from ever disagreeing.
-
-    Content-addressed on purpose: a turn writes each distinct prompt once, and a host that
-    upserts by sha stores the same persona once across a million turns. Never raises."""
-    sha = _prompt_sha(*parts)
-    if not sha:
+def _judge_sha(ctx) -> str:
+    """The judge's slot, plus the flag that swaps its whole criteria set
+    (`JUDGE_CONVERSATIONAL`: a persona with no tool executes nothing by design, so the
+    execution criteria are unsatisfiable and the judge rejected 100% of turns). Same limits
+    text under different criteria is a different configuration, so the flag rides in the
+    label — appended, since the host cannot know it at template time."""
+    base = _sha_for(ctx, "judge")
+    if not base:
         return ""
-    try:
-        store = ctx.metadata.get(mk.PROMPT_TEXTS)
-        if not isinstance(store, dict):
-            store = {}
-            ctx.metadata[mk.PROMPT_TEXTS] = store
-        if sha not in store and len(store) < _MAX_PROMPT_TEXTS:
-            store[sha] = {"kind": kind, "text": _join(*parts)[:_MAX_PROMPT_CHARS]}
-    except Exception:  # noqa: BLE001 — telemetry never kills a turn
-        logger.debug("prompt_publish_failed", exc_info=True)
-    return sha
-
-
-def _judge_sha(ctx, cfg) -> str:
-    """The judge reads the limits prompt, the injected context — and a FLAG that swaps the
-    whole criteria set (`JUDGE_CONVERSATIONAL`: a persona with no tool executes nothing by
-    design, so the execution criteria are unsatisfiable and the judge rejected 100% of turns).
-    Two calls with the same limits text and different criteria are different prompts, so the
-    flag rides in the digest."""
-    conversational = bool(ctx.metadata.get(mk.JUDGE_CONVERSATIONAL))
-    return _publish(ctx, "judge", cfg.limits_prompt or "",
-                    f"[criteria: {'conversational' if conversational else 'execution'}]")
+    return f"{base}+conv" if ctx.metadata.get(mk.JUDGE_CONVERSATIONAL) else base
 
 
 def _stamp(ctx, metrics, *, attempt: int = 0, prompt: str = "") -> None:
@@ -287,7 +246,7 @@ class Pipeline:
             if cfg.scope_prompt:
                 scope = await self._superego.check_input_scope(
                     ctx, cfg.scope_backend or cfg.gen_backend, scope_prompt=cfg.scope_prompt)
-                _stamp(ctx, scope.metrics, prompt=_publish(ctx, "scope", cfg.scope_prompt))
+                _stamp(ctx, scope.metrics, prompt=_sha_for(ctx, "scope"))
                 ctx.retry_metrics.append(scope.metrics)
                 if scope.blocked:
                     ctx.superego_result = SuperegoResult(
@@ -368,7 +327,7 @@ class Pipeline:
             ctx.superego_result = await self._superego.voice(
                 ctx, voice_backend, voice_prompt=cfg.voice_prompt)
             _stamp(ctx, ctx.superego_result.metrics if ctx.superego_result else None,
-                   prompt=_publish(ctx, "voice", cfg.voice_prompt))
+                   prompt=_sha_for(ctx, "voice"))
             await self._fire(hooks.after_superego, ctx)
             return await self._finish(ctx, hooks)
 
@@ -398,7 +357,7 @@ class Pipeline:
             ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
             ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
             _stamp(ctx, ctx.ego_result.metrics if ctx.ego_result else None, attempt=attempt,
-                   prompt=_publish(ctx, "ego", cfg.ego_prompt))
+                   prompt=_sha_for(ctx, "ego"))
             # Gate B held a destructive call → a PROPOSE turn: the action was deliberately NOT
             # executed (the host runs the confirmation UX next; ``_awaiting_confirmation`` is set
             # independently in the assembler). There is nothing to judge-and-retry — the booking is
@@ -478,13 +437,13 @@ class Pipeline:
         fast = cfg.judge_fast_backend
         if fast is not None and fast is not strong:
             verdict = await self._superego.evaluate(ctx, fast, limits_prompt=cfg.limits_prompt)
-            _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx, cfg))
+            _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx))
             ctx.retry_metrics.append(verdict.metrics)
             if verdict.approved:
                 return verdict
             logger.debug("judge_escalated fast_model=%s", getattr(fast, "model", "unknown"))
         verdict = await self._superego.evaluate(ctx, strong, limits_prompt=cfg.limits_prompt)
-        _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx, cfg))
+        _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx))
         ctx.retry_metrics.append(verdict.metrics)
         return verdict
 
