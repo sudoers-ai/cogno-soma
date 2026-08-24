@@ -14,6 +14,7 @@ from tests.conftest import (
     FakeNER,
     FakeNoumeno,
     FakeSuperego,
+    RecordingDispatcher,
     StubBackend,
     metrics,
 )
@@ -876,3 +877,94 @@ async def test_a_long_critique_is_truncated_before_it_rides_on_the_context(
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
                               dispatcher=dispatcher)
     assert len(ctx.metadata["judge_attempts"][0]["critique"]) == _CRITIQUE_CHARS
+
+
+# ── per-call identity: seq / attempt / prompt_sha ────────────────────────────────────────
+#
+# `stage_metrics` is "the populated canonical slots, then retry_metrics", and each canonical
+# slot holds the value that SURVIVED — so it is not call order, and reading it as one blames
+# the wrong call on a retried turn (measured on a real run: two `ego` entries at 3874 and 3747
+# prompt tokens, and the write belonged to the SECOND-listed one). The orchestrator is the
+# only layer that sequences the stages, so it is the only one that can say the true order.
+
+def _by_seq(ctx):
+    return [(m.seq, m.stage, m.attempt) for m in sorted(ctx.stage_metrics, key=lambda m: m.seq)]
+
+
+async def test_seq_recovers_the_true_call_order_that_stage_metrics_loses(
+        stub_embedder, stub_backend):
+    """The judge rejects once, so the EGO runs twice — and the two `ego` entries land in
+    OPPOSITE halves of `stage_metrics`. Sorting by `seq` puts them back in the order they ran.
+
+    Mutation: stop stamping (or stamp a constant) and the ordering assertion dies.
+    """
+    pipe = Pipeline(
+        embedder=stub_embedder,
+        noumeno=FakeNoumeno(), ner=FakeNER(), id_stage=FakeID(route="EGO"),
+        ego=FakeEgo(), superego=FakeSuperego(approve_after=2))
+    cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend, ego_prompt="x",
+                     limits_prompt="limits", voice_prompt="voice", max_corrections=3)
+    ctx = await pipe.run_turn(_ctx("registra 150"), cfg,
+                              dispatcher=RecordingDispatcher())
+
+    ordered = _by_seq(ctx)
+    seqs = [s for s, _, _ in ordered]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "um seq por chamada, sem furos"
+    stages = [st for _, st, _ in ordered]
+    assert stages.index("noumeno") < stages.index("ner") < stages.index("id")
+    # the two EGO runs, in the order they happened, each carrying its attempt
+    egos = [(s, a) for s, st, a in ordered if st == "ego"]
+    assert [a for _, a in egos] == [1, 2], "a 1ª tentativa roda ANTES da 2ª"
+    judges = [a for _, st, a in ordered if st == "superego_judge"]
+    assert judges == [1, 2]
+    # …and the raw list really does disagree, which is why seq had to exist
+    raw = [m.stage for m in ctx.stage_metrics]
+    assert raw != stages, "se a lista crua já estivesse em ordem, o seq seria supérfluo"
+
+
+async def test_the_two_ego_attempts_carry_DIFFERENT_prompt_shas(stub_embedder, stub_backend):
+    """The retry is handed a correction block the first attempt never saw, so the two calls
+    are different prompts and must not share a label — a label that collapses them makes the
+    whole "which text worked" question unanswerable on exactly the turns that have an answer."""
+    pipe = Pipeline(
+        embedder=stub_embedder,
+        noumeno=FakeNoumeno(), ner=FakeNER(), id_stage=FakeID(route="EGO"),
+        ego=FakeEgo(), superego=FakeSuperego(approve_after=2))
+    cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend, ego_prompt="x",
+                     limits_prompt="limits", voice_prompt="voice", max_corrections=3)
+    ctx = await pipe.run_turn(_ctx("registra 150"), cfg,
+                              dispatcher=RecordingDispatcher())
+
+    shas = [m.prompt_sha for m in ctx.stage_metrics if m.stage == "ego"]
+    assert len(shas) == 2 and all(shas), "as duas tentativas têm rótulo"
+    assert shas[0] != shas[1], "e são rótulos DIFERENTES: o bloco de correção mudou o texto"
+
+
+async def test_a_stage_with_no_host_supplied_prompt_has_an_EMPTY_sha(
+        stub_embedder, stub_backend):
+    """NOUMENO/NER render their own templates and the ID calls no model, so nothing a
+    deployment sets reaches them this turn. An empty sha says "nothing a deployment set" —
+    which is a different claim from "not recorded", and `seq` proves it was recorded."""
+    pipe = Pipeline(embedder=stub_embedder, noumeno=FakeNoumeno(), ner=FakeNER(),
+                    id_stage=FakeID(route="SUPEREGO"), ego=FakeEgo(), superego=FakeSuperego())
+    cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend, ego_prompt="x",
+                     voice_prompt="voice")
+    ctx = await pipe.run_turn(_ctx("oi"), cfg,
+                              dispatcher=RecordingDispatcher())
+
+    by_stage = {m.stage: m for m in ctx.stage_metrics}
+    assert by_stage["noumeno"].prompt_sha == "" and by_stage["noumeno"].seq > 0
+    assert by_stage["ner"].prompt_sha == ""
+    assert by_stage["superego_voice"].prompt_sha, "a voz recebe texto da persona: tem rótulo"
+
+
+async def test_the_stamp_counter_does_not_leak_into_persisted_metadata(
+        stub_embedder, stub_backend):
+    """It is bookkeeping, not a contract, and `ctx.metadata` is what the host persists."""
+    pipe = Pipeline(embedder=stub_embedder, noumeno=FakeNoumeno(), ner=FakeNER(),
+                    id_stage=FakeID(route="SUPEREGO"), ego=FakeEgo(), superego=FakeSuperego())
+    ctx = await pipe.run_turn(_ctx("oi"),
+                              TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend,
+                                         ego_prompt="x", voice_prompt="v"),
+                              dispatcher=RecordingDispatcher())
+    assert "_call_seq" not in ctx.metadata

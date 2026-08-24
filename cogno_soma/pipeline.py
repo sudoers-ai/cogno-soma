@@ -20,6 +20,7 @@ that state for a multi-turn session.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import logging
@@ -73,6 +74,59 @@ def _outcome(exec_) -> str:
     if error and error not in result:
         return f"{error}: {result}" if result else error
     return result
+
+
+# ── per-call identity: the orchestrator is the only layer that SEQUENCES the stages ──
+#
+# `PipelineContext.stage_metrics` is composed as "the populated canonical slots, then
+# `retry_metrics`", and each canonical slot holds the value that SURVIVED — so the list is not
+# call order, and reading it as one attributes a retried turn backwards (the `ego` among the
+# canonical slots is the LAST attempt; the one further down is the first). Nobody downstream
+# can recover the order by inference, because the information is not there. Here it is.
+#
+# `prompt_sha` digests the HOST-PARAMETRISED text handed to the call — the persona's
+# execution/voice/limits/scope prompt plus the injected context: what a deployment can change
+# without changing code. The stage composes the final prompt internally from these plus the
+# ctx, so this is a label for the inputs, not a copy of the output. Twelve hex chars: this
+# rides in a per-turn record, and a full digest buys collision headroom nobody needs to
+# distinguish a handful of prompt configurations.
+_SEQ_KEY = "_call_seq"          # private to this module; popped in `_finish`
+_SHA_CHARS = 12
+
+
+def _prompt_sha(*parts: "Optional[str]") -> str:
+    """Stable digest of the prompt inputs. Empty when the call takes no host-supplied text
+    (NOUMENO/NER render their own templates; the ID calls no model at all) — an empty sha says
+    "nothing a deployment set", which is different from "not recorded"."""
+    joined = "\x00".join(p for p in parts if p)
+    if not joined:
+        return ""
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:_SHA_CHARS]
+
+
+def _judge_sha(ctx, cfg) -> str:
+    """The judge reads the limits prompt, the injected context — and a FLAG that swaps the
+    whole criteria set (`JUDGE_CONVERSATIONAL`: a persona with no tool executes nothing by
+    design, so the execution criteria are unsatisfiable and the judge rejected 100% of turns).
+    Two calls with the same limits text and different criteria are different prompts, so the
+    flag rides in the digest."""
+    return _prompt_sha(cfg.limits_prompt, ctx.metadata.get(mk.EGO_CONTEXT),
+                       f"conversational={bool(ctx.metadata.get(mk.JUDGE_CONVERSATIONAL))}")
+
+
+def _stamp(ctx, metrics, *, attempt: int = 0, prompt: str = "") -> None:
+    """Mark one executed stage with its place in the turn. Never raises: telemetry must not be
+    the reason a turn dies, and an unstamped metric degrades to the old behaviour exactly."""
+    try:
+        seq = int(ctx.metadata.get(_SEQ_KEY, 0)) + 1
+        ctx.metadata[_SEQ_KEY] = seq
+        if metrics is None:
+            return
+        metrics.seq = seq
+        metrics.attempt = attempt
+        metrics.prompt_sha = prompt
+    except Exception:  # noqa: BLE001 — see above
+        logger.debug("stage_stamp_failed", exc_info=True)
 
 
 def _attempt_tools(ego_result) -> dict:
@@ -162,10 +216,13 @@ class Pipeline:
 
             # ── perception + routing ──────────────────────────────────
             ctx = await self._noumeno.process(ctx, cfg.noumeno_backend or cfg.gen_backend)
+            _stamp(ctx, ctx.noumeno.metrics if ctx.noumeno else None)
             await self._fire(hooks.after_noumeno, ctx)
             ctx = await self._ner.process(ctx, cfg.ner_backend or cfg.gen_backend)
+            _stamp(ctx, ctx.intent.metrics if ctx.intent else None)
             await self._fire(hooks.after_ner, ctx)
             ctx = await self._id.process(ctx, self._embedder)
+            _stamp(ctx, ctx.id_result.metrics if ctx.id_result else None)
             await self._fire(hooks.after_id, ctx)
 
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
@@ -179,6 +236,7 @@ class Pipeline:
             if cfg.scope_prompt:
                 scope = await self._superego.check_input_scope(
                     ctx, cfg.scope_backend or cfg.gen_backend, scope_prompt=cfg.scope_prompt)
+                _stamp(ctx, scope.metrics, prompt=_prompt_sha(cfg.scope_prompt))
                 ctx.retry_metrics.append(scope.metrics)
                 if scope.blocked:
                     ctx.superego_result = SuperegoResult(
@@ -258,6 +316,8 @@ class Pipeline:
             # ── voice (writes the final response; EGO and non-task paths) ──
             ctx.superego_result = await self._superego.voice(
                 ctx, voice_backend, voice_prompt=cfg.voice_prompt)
+            _stamp(ctx, ctx.superego_result.metrics if ctx.superego_result else None,
+                   prompt=_prompt_sha(cfg.voice_prompt, ctx.metadata.get(mk.EGO_CONTEXT)))
             await self._fire(hooks.after_superego, ctx)
             return await self._finish(ctx, hooks)
 
@@ -286,6 +346,10 @@ class Pipeline:
             # model for this turn (the host's ladder policy); None keeps the configured backend.
             ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
             ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
+            _stamp(ctx, ctx.ego_result.metrics if ctx.ego_result else None, attempt=attempt,
+                   prompt=_prompt_sha(cfg.ego_prompt, ctx.metadata.get(mk.EGO_CONTEXT),
+                                      json.dumps(ctx.metadata.get(mk.EGO_CORRECTION) or {},
+                                                 sort_keys=True, default=str)))
             # Gate B held a destructive call → a PROPOSE turn: the action was deliberately NOT
             # executed (the host runs the confirmation UX next; ``_awaiting_confirmation`` is set
             # independently in the assembler). There is nothing to judge-and-retry — the booking is
@@ -302,7 +366,7 @@ class Pipeline:
             if ctx.ego_result and ctx.ego_result.pending_confirmation:
                 judge = SuperegoResult(approved=True, metrics=_zero_metrics())
                 break
-            judge = await self._judge(ctx, cfg)
+            judge = await self._judge(ctx, cfg, attempt=attempt)
             # Record WHY, not just how many. The rejected attempts' critiques were fed into
             # EGO_CORRECTION.reason (overwritten each attempt) and then dropped, so after the
             # turn the only surviving fact was the count — and a red bench check could not be
@@ -352,7 +416,7 @@ class Pipeline:
                                               "attempts": attempt}
         return judge
 
-    async def _judge(self, ctx, cfg: TurnConfig):
+    async def _judge(self, ctx, cfg: TurnConfig, *, attempt: int = 0):
         """One judge verdict, optionally two-tier (``judge_fast_backend``).
 
         The fast judge screens every attempt; only its REJECTIONS escalate to the
@@ -365,15 +429,20 @@ class Pipeline:
         fast = cfg.judge_fast_backend
         if fast is not None and fast is not strong:
             verdict = await self._superego.evaluate(ctx, fast, limits_prompt=cfg.limits_prompt)
+            _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx, cfg))
             ctx.retry_metrics.append(verdict.metrics)
             if verdict.approved:
                 return verdict
             logger.debug("judge_escalated fast_model=%s", getattr(fast, "model", "unknown"))
         verdict = await self._superego.evaluate(ctx, strong, limits_prompt=cfg.limits_prompt)
+        _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx, cfg))
         ctx.retry_metrics.append(verdict.metrics)
         return verdict
 
     async def _finish(self, ctx, hooks: Hooks) -> PipelineContext:
+        # The stamp counter is bookkeeping, not a contract: every exit goes through here, so
+        # it never reaches the metadata a host persists (the seq itself lives on the metrics).
+        ctx.metadata.pop(_SEQ_KEY, None)
         await self._fire(hooks.after_turn, ctx)
         return ctx
 
