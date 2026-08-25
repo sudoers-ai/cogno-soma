@@ -156,8 +156,24 @@ def _attempt_tools(ego_result) -> dict:
     # Per-attempt, for the reader of the evidence. The TURN's answer comes from
     # `committed_this_turn(ctx)` over `turn_executions` — one definition, in anima.
     committed = any(t.side_effect and t.ok for t in execs)
+    # What the attempt was OFFERED, after every mask (tenant allow-list, the identity's RBAC
+    # scope, gate A's read-only filter). It lives on `EgoResult`, which the correction loop
+    # REPLACES on every retry, so only the surviving attempt's surface reached a reader — a
+    # turn whose attempt 1 was offered `book_appointment` and whose attempt 2 ran masked read
+    # as "that tool was never on the table". `tools` alone cannot answer it: an empty list is
+    # "the model declined" and "the model was never given the option" at once, and those have
+    # OPPOSITE fixes (a prompt problem vs a wiring problem).
+    #
+    # Computed OUTSIDE the try, like `committed`, and for a sharper reason than symmetry: the
+    # degraded return below yields `tools: []`, which is byte-identical to "called nothing" —
+    # the exact ambiguity this field exists to end. Dropping it precisely when the display
+    # path failed would leave the reader the ambiguous half and none of the answer. Safe here:
+    # anima types the field `list[str]`, so slicing cannot raise the way `json.dumps` of a
+    # tool's arguments can.
+    offered = list(getattr(ego_result, "tools_offered", None) or []) if ego_result else []
     try:
-        entry: dict = {"committed": committed, "tools": [
+        entry: dict = {"committed": committed,
+                       "tools_offered": offered[:_TOOLS_PER_ATTEMPT], "tools": [
             {"tool": t.tool,
              "args": _cut(json.dumps(t.arguments or {}, ensure_ascii=False, default=str),
                           _TOOL_ARGS_CHARS),
@@ -167,11 +183,16 @@ def _attempt_tools(ego_result) -> dict:
         ]}
         if len(execs) > _TOOLS_PER_ATTEMPT:
             entry["tools_dropped"] = len(execs) - _TOOLS_PER_ATTEMPT
+        # Same cap and the same reason as the executions: this rides in metadata a host
+        # persists per turn, and an unbounded list in a JSONB row is how tables rot.
+        if len(offered) > _TOOLS_PER_ATTEMPT:
+            entry["tools_offered_dropped"] = len(offered) - _TOOLS_PER_ATTEMPT
         return entry
     except Exception as exc:  # noqa: BLE001 — degraded telemetry, never a dead turn
         # The display list is what degrades. `committed` survives — a turn must never route
         # on a missing bit because a tool argument would not serialize.
-        return {"committed": committed, "tools": [], "tools_error": type(exc).__name__}
+        return {"committed": committed, "tools_offered": offered[:_TOOLS_PER_ATTEMPT],
+                "tools": [], "tools_error": type(exc).__name__}
 
 
 logger = logging.getLogger(__name__)

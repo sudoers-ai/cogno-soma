@@ -114,27 +114,40 @@ class FakeID:
         return ctx
 
 
+def _per_attempt(seq: Optional[list], invocation: int) -> list:
+    """A FLAT list means "the same every attempt"; a LIST OF LISTS means "entry N on
+    invocation N" (clamped to the last).
+
+    The second form exists because the review MUTATION-PROVED the first insufficient: an
+    implementation that backfills every JUDGE_ATTEMPTS entry with the LAST attempt's values —
+    the exact stale-ego_result bug class these fixes target — passed every test, since
+    identical per-attempt values make "per attempt" and "last, copied" indistinguishable.
+    """
+    if not seq:
+        return []
+    if isinstance(seq[0], list):
+        return list(seq[min(invocation - 1, len(seq) - 1)])
+    return list(seq)
+
+
 class FakeEgo:
     def __init__(self, *, calls: Optional[list] = None,
-                 tool_calls: Optional[list] = None) -> None:
+                 tool_calls: Optional[list] = None,
+                 tools_offered: Optional[list] = None) -> None:
         self._calls = calls
-        # ToolExecutions the fake "executes". A FLAT list runs the same tools every attempt; a
-        # LIST OF LISTS runs entry N on invocation N (clamped to the last). The second form
-        # exists because the review MUTATION-PROVED the first insufficient: an implementation
-        # that backfills every JUDGE_ATTEMPTS entry with the LAST attempt's tools — the exact
-        # stale-ego_result bug class the fix targets — passed every test, since identical
-        # per-attempt tools make "per attempt" and "last, copied" indistinguishable.
+        # ToolExecutions the fake "executes", and the tool NAMES it was offered — both in the
+        # `_per_attempt` shape, because both are per-attempt facts that the correction loop
+        # used to flatten onto the surviving attempt.
         self._tool_calls = tool_calls
+        self._tools_offered = tools_offered
         self.invocations = 0
         self.last_system_prompt: Optional[str] = None
 
     def _tools_for(self, invocation: int) -> list:
-        tc = self._tool_calls
-        if not tc:
-            return []
-        if isinstance(tc[0], list):
-            return list(tc[min(invocation - 1, len(tc) - 1)])
-        return list(tc)
+        return _per_attempt(self._tool_calls, invocation)
+
+    def _offered_for(self, invocation: int) -> list:
+        return _per_attempt(self._tools_offered, invocation)
 
     async def process(self, ctx, backend, dispatcher, *, system_prompt):
         self.invocations += 1
@@ -143,7 +156,8 @@ class FakeEgo:
             self._calls.append("ego")
         tools = self._tools_for(self.invocations)
         steps = [EgoStep(index=0, path="native", assistant_text="", tool_calls=tools)]             if tools else []
-        ctx.ego_result = EgoResult(steps=steps, metrics=metrics("ego"))
+        ctx.ego_result = EgoResult(steps=steps, metrics=metrics("ego"),
+                                   tools_offered=self._offered_for(self.invocations))
         return ctx
 
 
