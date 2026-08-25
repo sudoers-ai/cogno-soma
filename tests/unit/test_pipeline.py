@@ -679,6 +679,60 @@ async def test_a_blocked_call_keeps_BOTH_its_error_and_its_prose(
     assert "blocked_retry" in rec["result"] and "[BLOCKED]" in rec["result"]
 
 
+async def test_the_offered_cap_is_reported_on_BOTH_paths(
+        stub_embedder, stub_backend, dispatcher):
+    """`tools_offered_dropped` não tinha teste nenhum, e a assimetria entre os dois retornos
+    passou despercebida por isso: o caminho saudável emitia o contador e o DEGRADADO cortava em
+    silêncio. Um nome ausente lê-se como "nunca foi ofertado" — a leitura que este campo existe
+    para acabar —, portanto o ramo degradado a reintroduzia.
+
+    Achado do `/code-review` pós-merge do #33, que eu tinha mergeado sem revisão.
+
+    Mutação: emitir o contador só no `entry`, ou trocar `offered_cut` por `if False` — e este
+    morre nos dois casos."""
+    from cogno_anima.types import ToolExecution
+
+    from cogno_soma.pipeline import _TOOLS_PER_ATTEMPT
+
+    muitos = [f"tool_{i:02d}" for i in range(_TOOLS_PER_ATTEMPT + 5)]
+
+    class _Cursed:
+        def __str__(self):
+            raise RuntimeError("str() explode")
+
+    ok = ToolExecution(tool="t", arguments={}, result="ok", ok=True, side_effect=False)
+    odd = ToolExecution(tool="t", arguments={"x": _Cursed()}, result="ok", ok=True,
+                        side_effect=True)
+
+    for nome, exec_, degradado in (("saudável", ok, False), ("degradado", odd, True)):
+        pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                         ego=FakeEgo(tool_calls=[exec_], tools_offered=muitos),
+                         superego=FakeSuperego(approve=False))
+        ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                                  dispatcher=dispatcher)
+        rec = ctx.metadata["judge_attempts"][0]
+        assert ("tools_error" in rec) is degradado, f"o caminho {nome} não é o que se pensa"
+        assert len(rec["tools_offered"]) == _TOOLS_PER_ATTEMPT, nome
+        assert rec.get("tools_offered_dropped") == 5, (
+            f"o caminho {nome} cortou {5} nomes e não disse — ausência lê-se como "
+            f"'nunca foi ofertado'")
+
+
+async def test_a_catalog_that_FITS_carries_no_dropped_marker(
+        stub_embedder, stub_backend, dispatcher):
+    """O gémeo: sem ele, emitir o contador sempre passaria no teste acima."""
+    from cogno_anima.types import ToolExecution
+
+    ok = ToolExecution(tool="t", arguments={}, result="ok", ok=True, side_effect=False)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[ok], tools_offered=["a", "b"]),
+                     superego=FakeSuperego(approve=False))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
+                              dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]
+    assert rec["tools_offered"] == ["a", "b"] and "tools_offered_dropped" not in rec
+
+
 async def test_a_value_whose_str_raises_does_not_kill_the_turn(
         stub_embedder, stub_backend, dispatcher):
     """`default=str` fecha só um dos caminhos de raise do json.dumps. O do review (chave de

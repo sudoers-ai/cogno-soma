@@ -171,9 +171,16 @@ def _attempt_tools(ego_result) -> dict:
     # anima types the field `list[str]`, so slicing cannot raise the way `json.dumps` of a
     # tool's arguments can.
     offered = list(getattr(ego_result, "tools_offered", None) or []) if ego_result else []
+    # O corte é calculado AQUI, com o `offered`, e não dentro do try — porque os DOIS retornos o
+    # devem. A primeira versão só o emitia no caminho saudável: a entrada degradada cortava em
+    # silêncio, e um nome ausente lê-se como "nunca foi ofertado". O campo existe exatamente
+    # para acabar com essa leitura, portanto reintroduzi-la no ramo degradado é pior do que não
+    # ter campo — tem a forma de uma resposta. (`/code-review` pós-merge do #33.)
+    offered_shown = offered[:_TOOLS_PER_ATTEMPT]
+    offered_cut = len(offered) - len(offered_shown)
     try:
         entry: dict = {"committed": committed,
-                       "tools_offered": offered[:_TOOLS_PER_ATTEMPT], "tools": [
+                       "tools_offered": offered_shown, "tools": [
             {"tool": t.tool,
              "args": _cut(json.dumps(t.arguments or {}, ensure_ascii=False, default=str),
                           _TOOL_ARGS_CHARS),
@@ -185,14 +192,17 @@ def _attempt_tools(ego_result) -> dict:
             entry["tools_dropped"] = len(execs) - _TOOLS_PER_ATTEMPT
         # Same cap and the same reason as the executions: this rides in metadata a host
         # persists per turn, and an unbounded list in a JSONB row is how tables rot.
-        if len(offered) > _TOOLS_PER_ATTEMPT:
-            entry["tools_offered_dropped"] = len(offered) - _TOOLS_PER_ATTEMPT
+        if offered_cut:
+            entry["tools_offered_dropped"] = offered_cut
         return entry
     except Exception as exc:  # noqa: BLE001 — degraded telemetry, never a dead turn
         # The display list is what degrades. `committed` survives — a turn must never route
         # on a missing bit because a tool argument would not serialize.
-        return {"committed": committed, "tools_offered": offered[:_TOOLS_PER_ATTEMPT],
-                "tools": [], "tools_error": type(exc).__name__}
+        degraded: dict = {"committed": committed, "tools_offered": offered_shown,
+                          "tools": [], "tools_error": type(exc).__name__}
+        if offered_cut:
+            degraded["tools_offered_dropped"] = offered_cut
+        return degraded
 
 
 logger = logging.getLogger(__name__)
