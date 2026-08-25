@@ -595,6 +595,48 @@ async def test_a_rejected_attempts_writes_survive_into_the_record(
         "attempt 2 must carry attempt 2's tools — the entries are a per-attempt diff"
 
 
+async def test_each_attempt_records_the_surface_it_was_OFFERED(
+        stub_embedder, stub_backend, dispatcher):
+    """The other half of the same eye: not what the attempt DID, but what it COULD have done.
+
+    `tools_offered` lives on `EgoResult`, which the correction loop replaces every retry, so
+    only the surviving attempt's surface reached a reader. The turn this pins is the real one:
+    attempt 1 is offered `book_appointment` and books; the judge rejects; attempt 2 runs
+    read-only masked and can only list. Reading the survivor alone, the record says the write
+    tool "was never on the table" for a turn that booked.
+
+    Why `tools` alone cannot answer it: an empty `tools` is "the model declined" and "the model
+    was never given the option" at the same time, and those have OPPOSITE fixes — one a prompt
+    problem, one a wiring problem. This project has spent whole rounds on the wrong one.
+
+    The surfaces DIFFER per attempt, and that is this test's whole discriminating power: with
+    identical ones, "per attempt" and "last, copied" are indistinguishable — the same mutation
+    that already proved the executions test insufficient (see `_per_attempt` in conftest).
+    """
+    from cogno_anima.types import ToolExecution
+
+    booked = ToolExecution(tool="book_appointment", arguments={"slot": "14:00"},
+                           result="Booked 14:00.", ok=True, side_effect=True)
+    listed = ToolExecution(tool="list_appointments", arguments={},
+                           result="1 appointment.", ok=True, side_effect=False)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[booked], [listed]],
+                                 tools_offered=[["book_appointment", "list_appointments"],
+                                                ["list_appointments"]]),
+                     superego=FakeSuperego(approve=False, approve_after=2, critique="wrong slot"))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3),
+                              dispatcher=dispatcher)
+
+    attempts = ctx.metadata["judge_attempts"]
+    assert [a["approved"] for a in attempts] == [False, True]
+    assert attempts[0]["tools_offered"] == ["book_appointment", "list_appointments"], \
+        "attempt 1 must carry ITS OWN surface — not a backfill of the final attempt"
+    assert attempts[1]["tools_offered"] == ["list_appointments"], \
+        "attempt 2 ran masked: the write tool was NOT on its table, and the record must say so"
+    assert "book_appointment" not in attempts[1]["tools_offered"], \
+        "the masked attempt inherited the earlier surface — the entries are a per-attempt diff"
+
+
 async def test_a_tools_result_and_args_are_truncated_in_the_record(
         stub_embedder, stub_backend, dispatcher):
     """Same rule as the critique: this rides in metadata the host persists, and a tool result
@@ -655,12 +697,19 @@ async def test_a_value_whose_str_raises_does_not_kill_the_turn(
                         arguments={"when": Cursed()},
                         result="ok", ok=True, side_effect=True)
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
-                     ego=FakeEgo(tool_calls=[odd]),
+                     ego=FakeEgo(tool_calls=[odd],
+                                 tools_offered=["book_appointment", "list_appointments"]),
                      superego=FakeSuperego(approve=False))
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=1),
                               dispatcher=dispatcher)
     rec = ctx.metadata["judge_attempts"][0]
     assert rec["tools"] == [] and rec["tools_error"] == "RuntimeError"
+    # …e a superfície OFERTADA sobrevive à degradação, que é o único momento em que ela é
+    # indispensável: `tools: []` degradado é indistinguível de "não chamou nada", e é
+    # exactamente essa ambiguidade que o campo existe para desfazer. Por isso ele é calculado
+    # FORA do try, ao lado do `committed`.
+    assert rec["tools_offered"] == ["book_appointment", "list_appointments"], \
+        "a entrada degradada perdeu a superfície ofertada — resta o lado ambíguo e nenhuma resposta"
 
 
 async def test_a_write_from_a_REJECTED_attempt_STILL_HANDS_OFF(
