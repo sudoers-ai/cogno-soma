@@ -45,6 +45,10 @@ class TurnConfig:
     limits_prompt: str = ""           # judge criterion: persona limits
     voice_prompt: str = ""            # voicer: persona voice + limits
     voice_backend: Optional[LLMBackend] = None  # None → reuse ego_backend
+    # PII-CRITICAL block reply in the persona/tenant language. "" → the core's English
+    # _BLOCKED_FALLBACK — which is what a contact receives when the host forgets this field,
+    # so a deployment whose contacts are not English speakers should always set it.
+    block_message: str = ""
     max_corrections: int = 2          # EGO⇄SUPEREGO retry budget
     hooks: Optional[Hooks] = None     # None → no interception
     # Per-stage overrides for the JSON stages (None → gen_backend). Let each step run its own model.

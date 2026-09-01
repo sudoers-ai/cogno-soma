@@ -113,6 +113,29 @@ async def test_pii_critical_blocks_before_ego(stub_embedder, stub_backend, dispa
     assert ego.invocations == 0
 
 
+async def test_pii_block_ships_the_configured_message(stub_embedder, stub_backend, dispatcher):
+    """cfg.block_message reaches the contact — through the REAL stage, not the fake, so this
+    pins the seam the host actually uses (the fake echoing the kwarg would prove nothing)."""
+    from cogno_anima.stages.superego import SuperegoStage
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO", blocked=True),
+                     superego=SuperegoStage())
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, block_message="mensagem do host"),
+                              dispatcher=dispatcher)
+    assert ctx.stop_reason == "pii_blocked"
+    assert ctx.superego_result.response == "mensagem do host"
+
+
+async def test_pii_block_without_message_ships_the_core_fallback(stub_embedder, stub_backend,
+                                                                 dispatcher):
+    """The twin: an unset block_message must fall through to the core's fallback — the exact
+    text is pinned so a rename/removal in cogno-anima surfaces here instead of shipping ""."""
+    from cogno_anima.stages.superego import SuperegoStage, _BLOCKED_FALLBACK
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO", blocked=True),
+                     superego=SuperegoStage())
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend), dispatcher=dispatcher)
+    assert ctx.superego_result.response == _BLOCKED_FALLBACK
+
+
 async def test_scope_guard_blocks(stub_embedder, stub_backend, dispatcher):
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
                      superego=FakeSuperego(scope_blocked=True, refusal="nope"))
