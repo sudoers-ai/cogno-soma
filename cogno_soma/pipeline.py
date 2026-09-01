@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from cogno_anima import metakeys as mk
-from cogno_anima.types import committed_this_turn
+from cogno_anima.types import wrote_for_the_contact
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
@@ -143,7 +143,7 @@ def _attempt_tools(ego_result) -> dict:
     """One attempt's executions: the POLICY bit, then the bounded display list.
 
     `committed` is deliberately computed FIRST, outside the try, over the FULL list: it is the
-    only field this turn's routing depends on (see `committed_this_turn`), so it must not inherit
+    only field this turn's routing depends on (see `wrote_for_the_contact`), so it must not inherit
     the display path's failure modes — not the per-attempt cap, not the truncation, not a
     `json.dumps` that raises. Reading `t.side_effect`/`t.ok` cannot raise; serializing the
     arguments can.
@@ -154,7 +154,7 @@ def _attempt_tools(ego_result) -> dict:
     beats a dead turn."""
     execs = list(ego_result.tools_executed) if ego_result else []
     # Per-attempt, for the reader of the evidence. The TURN's answer comes from
-    # `committed_this_turn(ctx)` over `turn_executions` — one definition, in anima.
+    # `wrote_for_the_contact(ctx)` over `turn_executions` — one definition, in anima.
     committed = any(t.side_effect and t.ok for t in execs)
     # What the attempt was OFFERED, after every mask (tenant allow-list, the identity's RBAC
     # scope, gate A's read-only filter). It lives on `EgoResult`, which the correction loop
@@ -301,7 +301,12 @@ class Pipeline:
                     # because a later attempt only read. The definition of a commit lives in
                     # anima, beside the type it reads: three repos must agree on it, and this
                     # orchestrator is only one of six places that were getting it wrong.
-                    committed = committed_this_turn(ctx)
+                    # `wrote_for_the_contact` e não `committed_this_turn`: a pergunta aqui é
+                    # se o CONTACTO ficou com alguma coisa feita. Um turno cuja única chamada
+                    # com efeito foi transferir a conversa entre as NOSSAS personas não fez
+                    # nada por ele — e terminar num handoff em vez de continuar a conversa
+                    # seria fechar a porta por causa de uma escrita que ele não veria nunca.
+                    committed = wrote_for_the_contact(ctx)
                     if ego is not None and not committed:
                         # The judge rejected, but nothing was actually COMMITTED — the EGO only
                         # READ, or every mutating call failed. Rather than dead-end in a human
@@ -310,9 +315,14 @@ class Pipeline:
                         # in the trace (e.g. "I found your appointment — change it to 11:00?"
                         # or "that slot was just taken — want another?"). Fail-closed is
                         # preserved: a SUCCESSFUL-but-rejected mutation still hands off (never
-                        # voice an unverified commit as done) — and since `committed_this_turn`
+                        # voice an unverified commit as done) — and since `wrote_for_the_contact`
                         # reads every attempt, the "NOTHING was committed" the voice renders
-                        # below as a HARD RULE is now TRUE of the whole turn, not just of the
+                        # below as a HARD RULE is TRUE of the whole turn, not just of the
+                        # surviving attempt. E desde 2026-09-01 a regra fala do mundo DO
+                        # CONTACTO: um turno que só transferiu a conversa entre as NOSSAS
+                        # personas renderiza "nada foi comitado" e está a dizer a verdade — não
+                        # fez nada por ele. O encaminhamento não desaparece do traço; muda é
+                        # quem responde a seguir, e isso ele vê sem precisar que a voz o diga.
                         # attempt that happened to be last. The HOST owns the escalation
                         # policy on this signal (force a real handoff after N).
                         ctx.stop_reason = "needs_clarification"
