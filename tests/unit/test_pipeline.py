@@ -113,6 +113,37 @@ async def test_pii_critical_blocks_before_ego(stub_embedder, stub_backend, dispa
     assert ego.invocations == 0
 
 
+async def test_pii_block_ships_the_configured_message(stub_embedder, stub_backend, dispatcher):
+    """cfg.block_message reaches the contact — through the REAL stage, not the fake, so this
+    pins the seam the host actually uses (the fake echoing the kwarg would prove nothing)."""
+    from cogno_anima.stages.superego import SuperegoStage
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO", blocked=True),
+                     superego=SuperegoStage())
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, block_message="mensagem do host"),
+                              dispatcher=dispatcher)
+    assert ctx.stop_reason == "pii_blocked"
+    assert ctx.superego_result.response == "mensagem do host"
+
+
+async def test_pii_block_without_message_ships_the_core_fallback(stub_embedder, stub_backend,
+                                                                 dispatcher):
+    """The twin: an unset block_message must fall through to the core's English fallback.
+
+    Asserted by PROPERTIES, not by importing _BLOCKED_FALLBACK and comparing it to itself —
+    that tautology was measured green under both sabotages it existed to stop (the value
+    translated to pt-BR, and the value emptied to "", each shipping to a contact unnoticed).
+    The properties are the contract: non-blank, English-canonical (ascii), and about
+    sensitive personal data."""
+    from cogno_anima.stages.superego import SuperegoStage
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO", blocked=True),
+                     superego=SuperegoStage())
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend), dispatcher=dispatcher)
+    r = ctx.superego_result.response
+    assert r and r.strip()
+    assert r.isascii()                                   # the core is English-canonical
+    assert "personal" in r.lower() and "sensitive" in r.lower()
+
+
 async def test_scope_guard_blocks(stub_embedder, stub_backend, dispatcher):
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
                      superego=FakeSuperego(scope_blocked=True, refusal="nope"))

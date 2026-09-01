@@ -14,6 +14,7 @@ the seams a host wires up.
 | `embedder` | `Pipeline(...)` | `Embedder` for NOUMENO subject-continuity + ID goal similarity. |
 | `dispatcher` | `run_turn(...)` / `SessionRunner` | the host's `ToolDispatcher` — your DB/MCP/API hands. Build it per turn with the request's auth/tenant scope. |
 | `ego_prompt` / `scope_prompt` / `limits_prompt` / `voice_prompt` | `TurnConfig` | the persona's four prompt slots, as plain strings. |
+| `block_message` | `TurnConfig` | PII-CRITICAL block reply, in your tenant's language; unset → the core's English fallback reaches the contact. Keep it a static constant — it is the only outgoing message that never passes the outgoing-PII detector (the blocked branch returns before `voice()`). |
 
 soma does **not** select the persona. Resolve it at the host (e.g. with
 [`cogno-persona`](https://github.com/sudoers-ai/cogno-persona)'s `PersonaSelector`)

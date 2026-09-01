@@ -199,8 +199,9 @@ class FakeSuperego:
             self._calls.append("voice")
         return SuperegoResult(response=self._voice, approved=True, metrics=metrics("superego_voice"))
 
-    def _blocked_response(self, ctx):
-        return SuperegoResult(response=self._block_response, blocked=True, metrics=metrics("superego_voice"))
+    def _blocked_response(self, ctx, *, block_message=None):   # mirrors the real signature
+        return SuperegoResult(response=block_message or self._block_response, blocked=True,
+                              metrics=metrics("superego_voice"))
 
 
 @pytest.fixture
