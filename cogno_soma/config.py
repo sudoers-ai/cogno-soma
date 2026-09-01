@@ -48,6 +48,13 @@ class TurnConfig:
     # PII-CRITICAL block reply in the persona/tenant language. "" → the core's English
     # _BLOCKED_FALLBACK — which is what a contact receives when the host forgets this field,
     # so a deployment whose contacts are not English speakers should always set it.
+    #
+    # SAFETY INVARIANT — read before filling this with anything dynamic: the blocked branch
+    # returns BEFORE voice(), and the outgoing-PII provenance net runs only inside voice(),
+    # so this is the ONLY outgoing message that never passes the PII detector. It is safe
+    # while it stays a static per-tenant constant. The day a host interpolates turn data
+    # into it ("we can't process your CPF 123..."), it becomes the one leak path with no
+    # net underneath. Keep it constant.
     block_message: str = ""
     max_corrections: int = 2          # EGO⇄SUPEREGO retry budget
     hooks: Optional[Hooks] = None     # None → no interception

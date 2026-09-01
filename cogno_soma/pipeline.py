@@ -269,7 +269,7 @@ class Pipeline:
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
             if ctx.id_result and ctx.id_result.blocked:
                 ctx.superego_result = self._superego._blocked_response(
-                    ctx, block_message=cfg.block_message or None)
+                    ctx, block_message=cfg.block_message.strip() or None)
                 ctx.stop_reason = "pii_blocked"
                 logger.debug("turn_blocked stop_reason=pii_blocked")
                 return await self._finish(ctx, hooks)

@@ -127,13 +127,21 @@ async def test_pii_block_ships_the_configured_message(stub_embedder, stub_backen
 
 async def test_pii_block_without_message_ships_the_core_fallback(stub_embedder, stub_backend,
                                                                  dispatcher):
-    """The twin: an unset block_message must fall through to the core's fallback — the exact
-    text is pinned so a rename/removal in cogno-anima surfaces here instead of shipping ""."""
-    from cogno_anima.stages.superego import SuperegoStage, _BLOCKED_FALLBACK
+    """The twin: an unset block_message must fall through to the core's English fallback.
+
+    Asserted by PROPERTIES, not by importing _BLOCKED_FALLBACK and comparing it to itself —
+    that tautology was measured green under both sabotages it existed to stop (the value
+    translated to pt-BR, and the value emptied to "", each shipping to a contact unnoticed).
+    The properties are the contract: non-blank, English-canonical (ascii), and about
+    sensitive personal data."""
+    from cogno_anima.stages.superego import SuperegoStage
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="SUPEREGO", blocked=True),
                      superego=SuperegoStage())
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend), dispatcher=dispatcher)
-    assert ctx.superego_result.response == _BLOCKED_FALLBACK
+    r = ctx.superego_result.response
+    assert r and r.strip()
+    assert r.isascii()                                   # the core is English-canonical
+    assert "personal" in r.lower() and "sensitive" in r.lower()
 
 
 async def test_scope_guard_blocks(stub_embedder, stub_backend, dispatcher):
