@@ -57,6 +57,112 @@ _TOOL_ARGS_CHARS = 160
 # overflow is counted, never silent.
 _TOOLS_PER_ATTEMPT = 30
 
+# ── the correction loop ran out: a fact about US, not about the CONTACT ──────────────────
+#
+# This name exists because ``needs_clarification`` was carrying two facts at once, and only
+# one of them was ever true.
+#
+#   fact 1 — the name's promise, and what every consumer reads it as: this turn ends by
+#            ASKING THE CONTACT something. N of those in a row is a conversation going
+#            nowhere, which is exactly what a host-side cap is for.
+#   fact 2 — what the branch below actually knows: the EGO⇄SUPEREGO correction budget ran
+#            out and NOTHING was committed. Sometimes that also asks the contact something
+#            ("that slot was just taken — want another?"); very often it is a complete,
+#            correct answer the judge simply would not sign.
+#
+# Measured on the demo box 2026-09-03 04:32Z, over the 406 persisted turns that carry a
+# ``guards`` block: 92 turns exhausted the loop, and NOT ONE of them carried NER intent
+# ``CLARIFICATION``. So 92 of 92 ``needs_clarification`` signals were fact 2 wearing fact 1's
+# name, and the host cap that counts them was counting only the thing it was never built to
+# catch. The visible cost, from the same rows: 21 turns whose voice had already RUN and was
+# thrown away for the tenant's "não consegui concluir isso agora". The clearest of them needs
+# no context at all — trace 692: the owner asks "quais foram as duas reuniões que o Tony
+# montou com a Mercearia Lua Cheia?" and is answered "pode reformular?", while trace 685 (the
+# SAME question, one company over, three minutes earlier) got the honest answer. Nothing about
+# that question is ambiguous; the counter ate the reply.
+#
+# So fact 2 gets its own name and stops borrowing. ``needs_clarification`` keeps its meaning,
+# its consumers (the host's clarification cap and ``cogno_host.proactive._DELIVERABLE``) and
+# — this is the half that makes it a SEPARATION rather than a removal — a producer of its
+# own: see ``_clarification_asked_by_the_contact`` just below.
+#
+# The signal is still TERMINAL and still the host's to act on: the turn falls through to
+# ``voice()`` exactly as before, and what the contact gets is a decision the host makes with
+# the rest of the trace in hand (the anti-fabrication nets, whether a voice exists at all).
+STOP_JUDGE_EXHAUSTED = "judge_exhausted"
+
+# ── the other half: a clarification the CONTACT asked for ────────────────────────────────
+#
+# Renaming fact 2 only SEPARATES if fact 1 gets a producer. Otherwise the host's cap counts
+# nothing, and "we separated what it counts" is just "we took the ceiling away" with better
+# wording — from the contact it was built to protect.
+#
+# A real clarification is defined by WHO ASKED for it: the contact sent an ACTION request with
+# a referent this system cannot resolve ("cancela aquela consulta que eu marquei", with no
+# appointment on file), the executor could not act on it, and the VOICE came back with a
+# question. Two of those in a row is a conversation that cannot move — that is the cap's job.
+# It is NOT the judge refusing an honest draft three times over a request that was never
+# ambiguous: that one is born of OUR loop, and `_clarification_asked_by_the_contact` is only
+# consulted on a turn that is otherwise `completed`, so an exhausted turn can never acquire
+# this name however its voice happens to be worded.
+#
+# Measured 2026-09-03 04:32Z, replayed over the 406 persisted turns of the demo box that carry
+# a `guards` block (the replay reproduces this rule plus the host's per-session counter, and
+# agrees 11/11 with the `exhaustion_outcome`/`exhaustion_reason` the box itself stamped):
+#
+#            stop_reason=needs_clarification      cap fired      exhausted turns capped
+#   before                              92               25                          25
+#   after                               24                3                           0
+#
+# The cap does not go quiet — it starts firing on the thing it was built for. All 3 are the
+# SECOND consecutive "monta uma agenda de duas reuniões com … na próxima semana" answered with
+# "preciso que você me diga o dia e o horário". Before this it could not see one at all: the
+# judge APPROVES that honest question, so the turn ended `completed` and was never counted.
+#
+# Deliberately strict, because the cap's failure mode is expensive in both directions — it
+# either deletes a written answer or takes a human away. Three exclusions, and two of them
+# were paid for:
+#
+#   * a reply whose last sentence ends in anything but "?" is not counted;
+#   * a Gate-B/C proposal ("Agendar amanhã 10h. Posso seguir?") asks BY DESIGN and is waiting
+#     on a "yes" — the opposite of stuck. Counting it would hand off every 2nd confirmation;
+#   * an executor that was offered NO TOOL could not have acted whatever the referent, so
+#     nothing got stuck. This is the consultative persona (the CLOSER: a seller, an SDR) whose
+#     whole job is asking, and it is the SAME carve-out the host's cap already makes by
+#     `JUDGE_CONVERSATIONAL` — made here so the signal is never emitted rather than emitted
+#     and then carved out again downstream. Caught by `test_arc_state.py`, not by review: the
+#     first cut labelled every CLOSER question a clarification, and `service._apply_arc` folds
+#     nothing on a non-`completed` terminal — so the lead's answers stopped being recorded and
+#     the persona would re-ask them, which is the exact loop that arc state exists to stop.
+#     Costs nothing on the measured rows: all 24 already had a tool surface.
+_SENTENCE_ENDINGS = "?!."
+
+
+def _ends_as_a_question(text: str) -> bool:
+    """Does the reply CLOSE by asking? The last sentence-ending mark is the one that decides,
+    so a trailing emoji or whitespace is ignored and "Prefere 10h ou 11h? 😊" still counts,
+    while "Que tal? Vou deixar reservado." does not."""
+    for ch in reversed((text or "").strip()):
+        if ch in _SENTENCE_ENDINGS:
+            return ch == "?"
+    return False
+
+
+def _clarification_asked_by_the_contact(ctx: PipelineContext) -> bool:
+    """The contact's own request is what could not be resolved — see the block above."""
+    intent = ctx.intent
+    if intent is None or intent.intent_class != "ACTION_REQUEST":
+        return False                       # only an ACTION can be blocked on a missing referent
+    if wrote_for_the_contact(ctx):
+        return False                       # it DID act; nothing is pending on the contact
+    ego = ctx.ego_result
+    if ego is None or not ego.tools_offered:
+        return False                       # nothing was ever actionable → nothing got stuck
+    if ego.pending_confirmation:
+        return False                       # a proposal awaiting "yes" is not a stuck turn
+    voiced = ctx.superego_result.response if ctx.superego_result else ""
+    return _ends_as_a_question(voiced)
+
 
 def _cut(text: str, limit: int) -> str:
     """Truncate WITH a marker. A cut JSON string without one renders as broken-but-plausible
@@ -311,7 +417,7 @@ class Pipeline:
                     if ego is not None and not committed:
                         # The judge rejected, but nothing was actually COMMITTED — the EGO only
                         # READ, or every mutating call failed. Rather than dead-end in a human
-                        # handoff, keep the conversation alive: signal needs_clarification and
+                        # handoff, keep the conversation alive: signal STOP_JUDGE_EXHAUSTED and
                         # fall through to voice() below, which grounds a truthful continuation
                         # in the trace (e.g. "I found your appointment — change it to 11:00?"
                         # or "that slot was just taken — want another?"). Fail-closed is
@@ -325,8 +431,10 @@ class Pipeline:
                         # fez nada por ele. O encaminhamento não desaparece do traço; muda é
                         # quem responde a seguir, e isso ele vê sem precisar que a voz o diga.
                         # attempt that happened to be last. The HOST owns the escalation
-                        # policy on this signal (force a real handoff after N).
-                        ctx.stop_reason = "needs_clarification"
+                        # policy on this signal — and now it can, because the signal finally
+                        # says what happened instead of guessing what the reply will be like
+                        # (see STOP_JUDGE_EXHAUSTED at the top of this module for the 87/87).
+                        ctx.stop_reason = STOP_JUDGE_EXHAUSTED
                         # The voice must know the execution was rejected — otherwise it only
                         # sees the successful reads and the upbeat draft and happily narrates
                         # the goal as done ("Prontinho! confirmados") while the DB never
@@ -341,7 +449,10 @@ class Pipeline:
                         # what review just refused. Name the kind so the voice can tell them
                         # apart — and so the HOST can act on an unverified turn (it could
                         # previously only infer `needs_clarification`, which a legitimate
-                        # mid-flow question raises too).
+                        # mid-flow question raises too). That inference is what this branch
+                        # stopped making of ITSELF: the `kind` below is about the TRACE (did
+                        # anything run), the stop reason is about the LOOP (the budget ran
+                        # out) — neither is a claim about what the contact needs next.
                         # …e POR TURNO pela mesma razão do `committed` acima: a tentativa
                         # sobrevivente pode voltar com trace VAZIO (a re-chamada dela é
                         # bloqueada por duplicata — rotineiro), e ler isso como "nada executou"
@@ -355,7 +466,8 @@ class Pipeline:
                                       "the execution did not accomplish the user's goal",
                             "kind": kind,
                         }
-                        logger.debug("turn_clarify stop_reason=needs_clarification kind=%s", kind)
+                        logger.debug("turn_exhausted stop_reason=%s kind=%s",
+                                     STOP_JUDGE_EXHAUSTED, kind)
                         # no on_commit: nothing was committed
                     else:
                         ctx.needs_handoff = True
@@ -370,6 +482,15 @@ class Pipeline:
                 ctx, voice_backend, voice_prompt=cfg.voice_prompt)
             _stamp(ctx, ctx.superego_result.metrics if ctx.superego_result else None,
                    prompt=_sha_for(ctx, "voice"))
+            # Fact 1, and it can only be decided HERE: whether the reply asks the contact
+            # something is not knowable until the voice has written it. Guarded on
+            # `== "completed"` and not on `!= STOP_JUDGE_EXHAUSTED`, so the promotion can
+            # never overwrite a terminal another gate already decided — a judge-exhausted
+            # turn keeps its own name whatever the voice happens to end with, which is the
+            # whole point of the split.
+            if ctx.stop_reason == "completed" and _clarification_asked_by_the_contact(ctx):
+                ctx.stop_reason = "needs_clarification"
+                logger.debug("turn_clarify stop_reason=needs_clarification")
             await self._fire(hooks.after_superego, ctx)
             return await self._finish(ctx, hooks)
 

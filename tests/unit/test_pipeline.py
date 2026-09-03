@@ -4,7 +4,7 @@
 import cogno_anima.metakeys as mk
 from cogno_anima.types import committed_this_turn
 
-from cogno_soma import Pipeline, TurnConfig
+from cogno_soma import Pipeline, STOP_JUDGE_EXHAUSTED, TurnConfig
 
 from cogno_anima.types import SuperegoResult
 
@@ -163,14 +163,14 @@ async def test_scope_guard_allows_then_continues(stub_embedder, stub_backend, di
 
 async def test_correction_loop_retries_until_budget(stub_embedder, stub_backend, dispatcher):
     """Judge rejects every attempt → loop runs max_corrections times. The EGO only READ (no
-    side effect) so the turn ends in needs_clarification (voiced), not a dead-end handoff."""
+    side effect) so the turn ends in `judge_exhausted` (voiced), not a dead-end handoff."""
     ego = FakeEgo()                         # EgoResult has no steps → has_side_effects is False
     sup = FakeSuperego(approve=False)
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=ego, superego=sup)
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
     assert ego.invocations == 3
     assert ctx.needs_handoff is False
-    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
     assert ctx.superego_result.response == "final reply"   # voiced → conversation stays alive
     # the judge's verdict reaches the voice — otherwise it narrates the goal as done
     assert ctx.metadata["voice_correction"]["reason"] == "fix it"
@@ -211,7 +211,7 @@ async def test_gate_b_hold_skips_judge_and_retry(stub_embedder, stub_backend, di
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
     assert ego.invocations == 1                          # no retry
     assert sup._evals == 0                               # judge NEVER consulted for a Gate-B hold
-    assert ctx.stop_reason != "needs_clarification"      # not a false rejection
+    assert ctx.stop_reason != STOP_JUDGE_EXHAUSTED       # not a false rejection
     assert ctx.superego_result.response == "final reply"  # voiced the proposal
 
 
@@ -227,12 +227,12 @@ async def test_reject_after_side_effect_hands_off(stub_embedder, stub_backend, d
 
 async def test_reject_after_failed_mutation_stays_alive(stub_embedder, stub_backend, dispatcher):
     """Judge rejects AND the only mutating call FAILED (nothing committed — e.g. the confirmed
-    slot was taken) → needs_clarification, NOT handoff: voice a truthful continuation."""
+    slot was taken) → `judge_exhausted`, NOT handoff: voice a truthful continuation."""
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=_FailedMutationEgo(),
                      superego=FakeSuperego(approve=False))
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
     assert ctx.needs_handoff is False
-    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
     assert ctx.superego_result.response == "final reply"   # voiced → conversation stays alive
     assert ctx.metadata["voice_correction"]["reason"] == "fix it"
 
@@ -803,7 +803,7 @@ async def test_a_write_from_a_REJECTED_attempt_STILL_HANDS_OFF(
 
     Tentativa 1 confirma três linhas erradas (`side_effect` + `ok`), o juiz reprova; tentativa 2
     só LÊ e é reprovada também. O `ctx.ego_result` é SUBSTITUÍDO a cada retry, então o turno
-    saía do laço parecendo que não executou nada — e ia para `needs_clarification`, com a voz
+    saía do laço parecendo que não executou nada — e ia para o ramo esgotado, com a voz
     recebendo "NOTHING was committed" como REGRA DURA. O banco tinha três linhas mudadas que
     nenhum juiz aprovou, e o usuário era informado do contrário.
 
@@ -889,7 +889,7 @@ async def test_a_turn_that_only_READ_still_keeps_the_conversation_alive(
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
                               dispatcher=dispatcher)
 
-    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
     assert not getattr(ctx, "needs_handoff", False)
     assert ctx.metadata[mk.VOICE_CORRECTION]["kind"] == "not_executed"
     assert ctx.superego_result is not None      # a voz escreve a continuação
@@ -909,7 +909,7 @@ async def test_a_FAILED_write_from_a_rejected_attempt_is_not_a_commit(
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, max_corrections=2),
                               dispatcher=dispatcher)
 
-    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
     assert ctx.superego_result is not None
 
 
@@ -1179,3 +1179,201 @@ async def test_the_stamp_counter_does_not_leak_into_persisted_metadata(
                                          ego_prompt="x", voice_prompt="v"),
                               dispatcher=RecordingDispatcher())
     assert "_call_seq" not in ctx.metadata
+
+
+async def test_an_exhausted_loop_is_NOT_a_clarification(stub_embedder, stub_backend, dispatcher):
+    """A separação, na FONTE — o gêmeo que a serra dos traços 644–647 precisava.
+
+    A pergunta certa ("vocês atendem no sábado de manhã?") é lida, respondida corretamente e
+    o juiz reprova as três tentativas. O que este ramo SABE é que o orçamento de correção
+    acabou e nada foi comitado; o que ele DIZIA era que o contacto precisa esclarecer alguma
+    coisa. Medido na caixa 2026-09-03: 92 de 92 turnos esgotados, ZERO com intenção
+    `CLARIFICATION` — o nome nunca foi ganho, e o teto do host que os contava apagou 21 vozes
+    já escritas (traço 647 é a MESMA pergunta do 644, respondida lá e apagada aqui).
+
+    O sinal continua terminal e a voz continua a correr; o que muda é que o consumidor
+    consegue distinguir os dois factos. Reverta `STOP_JUDGE_EXHAUSTED` para
+    `"needs_clarification"` e este teste fica vermelho — é essa a mutação."""
+    from cogno_anima.types import ToolExecution
+
+    read = ToolExecution(tool="get_schedule_settings", arguments={},
+                         result="work_saturdays=False, work_start=09:00", ok=True,
+                         side_effect=False)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(tool_calls=[[read], [read], [read]]),
+                     superego=FakeSuperego(approve=False, critique="did not answer"))
+    ctx = await pipe.run_turn(_ctx("vocês atendem no sábado de manhã?"),
+                              _cfg(stub_backend, max_corrections=3), dispatcher=dispatcher)
+
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
+    # O ponto do conserto: este turno não reivindica mais o nome do outro facto.
+    assert ctx.stop_reason != "needs_clarification", \
+        "o esgotamento do juiz voltou a vestir o nome da clarificação"
+    assert ctx.needs_handoff is False
+    assert ctx.superego_result is not None            # a voz correu — e é ela que deve seguir
+    assert ctx.metadata[mk.VOICE_CORRECTION]["kind"] == "not_executed"
+
+
+async def test_the_exhausted_name_is_exported_for_the_host_to_match_on(stub_embedder):
+    """O host tem de casar com este valor (a whitelist de entrega proativa e os tetos de
+    escalada lêem `stop_reason`). Um literal copiado lá seria a SEGUNDA definição de um
+    contrato que já esteve errado uma vez — por isso a constante é pública."""
+    import cogno_soma
+
+    assert cogno_soma.STOP_JUDGE_EXHAUSTED == "judge_exhausted"
+    assert "STOP_JUDGE_EXHAUSTED" in cogno_soma.__all__
+
+
+# ── a clarification the CONTACT asked for: the OTHER half of the separation ────────────────
+#
+# Deliberately NOT a double that returns the signal ready-made: that would be the test
+# fabricating the very thing under test. Both stages here decide from `ctx.user_input` — an
+# under-specified referent leaves the executor with nothing to act on and the voice with a
+# question; a resolvable one books and the voice confirms.
+class _ReferentEgo(FakeEgo):
+    """The executor as it behaves on a missing referent: it LOOKS, finds nothing to act on,
+    and does not invent an argument. A resolvable request commits."""
+
+    _AMBIGUOUS = ("aquela", "de sempre", "o de sempre")
+
+    async def process(self, ctx, backend, dispatcher, *, system_prompt):
+        from cogno_anima.types import EgoResult, EgoStep, ToolExecution
+        ctx = await super().process(ctx, backend, dispatcher, system_prompt=system_prompt)
+        text = (ctx.user_input or "").lower()
+        if any(w in text for w in self._AMBIGUOUS):
+            call = ToolExecution(tool="list_appointments", arguments={}, ok=True,
+                                 side_effect=False, result="No appointments on file.")
+        else:
+            call = ToolExecution(tool="cancel_appointment", arguments={"id": "a1"}, ok=True,
+                                 side_effect=True, result="Appointment a1 cancelled.")
+        ctx.ego_result = EgoResult(
+            steps=[EgoStep(index=0, path="native", tool_calls=[call])],
+            # a superfície OFERTADA: sem ela não havia acção possível, e uma pergunta não é
+            # sinal de nada (é a persona consultiva — ver o teste da carve-out abaixo)
+            tools_offered=["list_appointments", "cancel_appointment"],
+            metrics=ctx.ego_result.metrics)
+        return ctx
+
+
+class _ReferentSuperego(FakeSuperego):
+    """The voicer, writing from what the executor came back with: nothing to act on → it asks
+    which one; a cancelled row → it states the fact."""
+
+    async def voice(self, ctx, backend, *, voice_prompt):
+        from cogno_anima.types import SuperegoResult
+        wrote = any(c.side_effect and c.ok
+                    for s in (ctx.ego_result.steps if ctx.ego_result else [])
+                    for c in s.tool_calls)
+        text = ("Pronto, cancelei a consulta. 👍" if wrote
+                else "Não encontrei nenhuma consulta sua. Qual delas você quer cancelar?")
+        return SuperegoResult(response=text, approved=True, metrics=metrics("superego_voice"))
+
+
+async def test_an_underspecified_ACTION_the_voice_asks_about_IS_a_clarification(
+        stub_embedder, stub_backend, dispatcher):
+    """Fact 1, com um produtor — sem ele a separação seria só «tirar o tecto».
+
+    O contacto pede uma ACÇÃO cujo referente o sistema não resolve ("cancela aquela consulta
+    que eu marquei", sem nenhuma no ficheiro), o executor não consegue agir e a VOZ devolve
+    uma pergunta. Quem pediu o esclarecimento foi o PEDIDO DO CONTACTO — é isto que o tecto
+    do host existe para apanhar duas vezes seguidas."""
+    pipe = _pipeline(stub_embedder, ner=FakeNER(intent_class="ACTION_REQUEST"),
+                     id_stage=FakeID(route="EGO"), ego=_ReferentEgo(),
+                     superego=_ReferentSuperego())
+    ctx = await pipe.run_turn(_ctx("cancela aquela consulta que eu marquei"),
+                              _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
+
+    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.superego_result.response.endswith("?")
+
+
+async def test_the_same_request_WITH_its_referent_is_not_a_clarification(
+        stub_embedder, stub_backend, dispatcher):
+    """A gêmea que faz a de cima discriminar: a MESMA persona, o MESMO pedido com o referente
+    presente — o executor age e a voz afirma. Nada para o tecto contar."""
+    pipe = _pipeline(stub_embedder, ner=FakeNER(intent_class="ACTION_REQUEST"),
+                     id_stage=FakeID(route="EGO"), ego=_ReferentEgo(),
+                     superego=_ReferentSuperego())
+    ctx = await pipe.run_turn(_ctx("cancela a consulta de amanhã às 10h"),
+                              _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
+
+    assert ctx.stop_reason == "completed"
+
+
+async def test_an_EXHAUSTED_turn_cannot_become_a_clarification_by_asking(
+        stub_embedder, stub_backend, dispatcher):
+    """A porta nova não pode reabrir a serra.
+
+    O juiz esgota (nada comitado) E a voz calha acabar numa pergunta — a forma exacta que
+    tentaria os dois nomes ao mesmo tempo. A promoção só corre sobre um turno que de outro
+    modo seria `completed`, então este mantém o seu: o esgotamento do juiz NUNCA entra no
+    contador, seja qual for a redacção da resposta.
+
+    A mutação: troque o guarda `== "completed"` por `!= STOP_JUDGE_EXHAUSTED` e este teste
+    continua verde; troque-o por qualquer coisa que aceite o turno esgotado e fica vermelho."""
+    from cogno_anima.types import ToolExecution
+
+    read = ToolExecution(tool="list_appointments", arguments={}, ok=True, side_effect=False,
+                         result="No appointments on file.")
+    pipe = _pipeline(stub_embedder, ner=FakeNER(intent_class="ACTION_REQUEST"),
+                     id_stage=FakeID(route="EGO"),
+                     # ofertado NÃO-VAZIO de propósito: sem isto o turno falharia a carve-out
+                     # da persona consultiva e o teste passaria pela razão errada — deixaria de
+                     # discriminar a mutação que ele existe para apanhar.
+                     ego=FakeEgo(tool_calls=[[read], [read]],
+                                 tools_offered=["list_appointments", "cancel_appointment"]),
+                     superego=FakeSuperego(approve=False, critique="did not cancel anything",
+                                           voice="Não encontrei a consulta. Qual delas?"))
+    ctx = await pipe.run_turn(_ctx("cancela aquela consulta que eu marquei"),
+                              _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
+
+    assert ctx.superego_result.response.endswith("?")     # a voz PERGUNTOU…
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED        # …e ainda assim não é clarificação
+    assert ctx.stop_reason != "needs_clarification"
+
+
+async def test_a_gate_B_proposal_is_not_a_clarification(stub_embedder, stub_backend, dispatcher):
+    """"Agendar amanhã 10h. Posso seguir?" pergunta POR DESENHO e está à espera de um «sim» —
+    o oposto de preso. Contá-la mandaria para um humano cada segunda confirmação."""
+    pipe = _pipeline(stub_embedder, ner=FakeNER(intent_class="ACTION_REQUEST"),
+                     id_stage=FakeID(route="EGO"), ego=_PendingConfirmEgo(),
+                     superego=FakeSuperego(voice="Agendar amanhã 10h. Posso seguir? ✅"))
+    ctx = await pipe.run_turn(_ctx("marca amanhã às 10h"),
+                              _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
+
+    assert ctx.stop_reason == "completed"
+
+
+async def test_the_question_test_reads_the_LAST_sentence(stub_embedder):
+    """Pura, e a razão de não ser `"?" in text`: uma resposta que pergunta a meio e depois
+    AFIRMA ("Que tal? Vou deixar reservado.") não está à espera do contacto."""
+    from cogno_soma.pipeline import _ends_as_a_question
+
+    assert _ends_as_a_question("Qual delas você quer cancelar?")
+    assert _ends_as_a_question("Prefere 10h ou 11h? 😊")          # emoji à cauda não conta
+    assert not _ends_as_a_question("Que tal? Vou deixar reservado.")
+    assert not _ends_as_a_question("Pronto, cancelei a consulta. 👍")
+    assert not _ends_as_a_question("")
+
+
+async def test_a_persona_with_NO_TOOL_asking_a_question_is_not_a_clarification(
+        stub_embedder, stub_backend, dispatcher):
+    """A carve-out que o `test_arc_state.py` do host cobrou, e que é melhor feita AQUI.
+
+    Uma persona consultiva (o CLOSER: um vendedor, um SDR) não recebe ferramenta nenhuma:
+    PERGUNTAR é o trabalho dela, não o sintoma de uma acção presa. Marcá-la como clarificação
+    emitia um sinal que três consumidores a jusante teriam de voltar a descartar — e um deles
+    não o descartava: o `service._apply_arc` não dobra nada num terminal que não seja
+    `completed`, portanto as respostas do lead deixavam de ser registadas e a persona voltava
+    a perguntar o mesmo. É o laço exacto que o estado de arco existe para parar.
+
+    O host já faz esta distinção com `JUDGE_CONVERSATIONAL`; aqui o sinal simplesmente não
+    nasce."""
+    pipe = _pipeline(stub_embedder, ner=FakeNER(intent_class="ACTION_REQUEST"),
+                     id_stage=FakeID(route="EGO"), ego=FakeEgo(),          # nada ofertado
+                     superego=FakeSuperego(voice="E quantos contatos você recebe por dia?"))
+    ctx = await pipe.run_turn(_ctx("quero vender mais"),
+                              _cfg(stub_backend, max_corrections=2), dispatcher=dispatcher)
+
+    assert ctx.superego_result.response.endswith("?")
+    assert ctx.stop_reason == "completed"

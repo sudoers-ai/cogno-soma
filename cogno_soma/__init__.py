@@ -11,7 +11,7 @@ client, billing or a persona store.
 from cogno_soma.config import TurnConfig
 from cogno_soma.errors import SomaError, StopPipeline
 from cogno_soma.hooks import HookFn, Hooks
-from cogno_soma.pipeline import Pipeline
+from cogno_soma.pipeline import Pipeline, STOP_JUDGE_EXHAUSTED
 from cogno_soma.session import SessionRunner
 
 __all__ = [
@@ -21,6 +21,11 @@ __all__ = [
     "Hooks",
     "HookFn",
     "StopPipeline",
+    # The terminal signal for "the correction loop ran out and nothing was committed".
+    # Exported because the HOST has to match on it (its proactive-delivery whitelist and
+    # its escalation caps both key on `stop_reason`), and a string literal copied there
+    # would be a second definition of a contract that has already been wrong once.
+    "STOP_JUDGE_EXHAUSTED",
     "SomaError",
 ]
 
