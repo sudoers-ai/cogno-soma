@@ -1,7 +1,7 @@
 """Tests for the interception seam: Hooks fire points + StopPipeline + atomicity."""
 
 
-from cogno_soma import Hooks, Pipeline, StopPipeline, TurnConfig
+from cogno_soma import Hooks, Pipeline, STOP_JUDGE_EXHAUSTED, StopPipeline, TurnConfig
 from cogno_anima.types import PipelineContext
 
 from tests.conftest import FakeEgo, FakeID, FakeNER, FakeNoumeno, FakeSuperego
@@ -105,7 +105,7 @@ async def test_on_rollback_fires_per_retry(stub_embedder, stub_backend, dispatch
 
 class _SideEffectEgo(FakeEgo):
     """A FakeEgo whose trace records a committed mutating call (has_side_effects=True), so a
-    judge rejection ends in a handoff (not the read-only needs_clarification path)."""
+    judge rejection ends in a handoff (not the read-only `judge_exhausted` path)."""
 
     async def process(self, ctx, backend, dispatcher, *, system_prompt):
         from cogno_anima.types import EgoResult, EgoStep, ToolExecution
@@ -129,13 +129,13 @@ async def test_no_commit_on_handoff(stub_embedder, stub_backend, dispatcher):
 
 
 async def test_no_commit_on_clarification(stub_embedder, stub_backend, dispatcher):
-    """A read-only rejection (no side effect) ends in needs_clarification — still no commit."""
+    """A read-only rejection (no side effect) ends in `judge_exhausted` — still no commit."""
     committed: list[int] = []
     hooks = Hooks(on_commit=lambda c: committed.append(1))
     pipe = _pipe(stub_embedder, [], route="EGO", superego=FakeSuperego(approve=False))
     ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend, hooks, max_corrections=2), dispatcher=dispatcher)
     assert ctx.needs_handoff is False
-    assert ctx.stop_reason == "needs_clarification"
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
     assert committed == []  # never commit an unapproved execution
 
 
