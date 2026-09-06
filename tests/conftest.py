@@ -133,13 +133,20 @@ def _per_attempt(seq: Optional[list], invocation: int) -> list:
 class FakeEgo:
     def __init__(self, *, calls: Optional[list] = None,
                  tool_calls: Optional[list] = None,
-                 tools_offered: Optional[list] = None) -> None:
+                 tools_offered: Optional[list] = None,
+                 drafts: Optional[list] = None) -> None:
         self._calls = calls
         # ToolExecutions the fake "executes", and the tool NAMES it was offered — both in the
         # `_per_attempt` shape, because both are per-attempt facts that the correction loop
         # used to flatten onto the surviving attempt.
         self._tool_calls = tool_calls
         self._tools_offered = tools_offered
+        # The DRAFT, one entry per attempt (clamped to the last) — a SCALAR per attempt, so it
+        # takes a flat list rather than `_per_attempt`'s list-of-lists shape. Same reason as its
+        # two neighbours: `EgoResult` is REPLACED on every retry, so a per-attempt fact a test
+        # holds CONSTANT cannot tell "recorded per attempt" from "backfilled from the last
+        # one" — the mutation that already proved two earlier ledger tests insufficient.
+        self._drafts = drafts
         self.invocations = 0
         self.last_system_prompt: Optional[str] = None
 
@@ -149,13 +156,22 @@ class FakeEgo:
     def _offered_for(self, invocation: int) -> list:
         return _per_attempt(self._tools_offered, invocation)
 
+    def _draft_for(self, invocation: int) -> str:
+        return (str(self._drafts[min(invocation - 1, len(self._drafts) - 1)])
+                if self._drafts else "")
+
     async def process(self, ctx, backend, dispatcher, *, system_prompt):
         self.invocations += 1
         self.last_system_prompt = system_prompt
         if self._calls is not None:
             self._calls.append("ego")
         tools = self._tools_for(self.invocations)
-        steps = [EgoStep(index=0, path="native", assistant_text="", tool_calls=tools)]             if tools else []
+        draft = self._draft_for(self.invocations)
+        # `EgoResult.draft` is DERIVED (`steps[-1].assistant_text`), so a draft needs a step of
+        # its own — text with no tool call is exactly the tool-less persona (a seller, an SDR)
+        # whose every turn looks like this. No drafts configured → byte-identical to before.
+        steps = [EgoStep(index=0, path="native", assistant_text=draft, tool_calls=tools)] \
+            if (tools or draft) else []
         ctx.ego_result = EgoResult(steps=steps, metrics=metrics("ego"),
                                    tools_offered=self._offered_for(self.invocations))
         return ctx
