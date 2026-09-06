@@ -27,13 +27,13 @@ from pathlib import Path
 from typing import Optional
 
 from cogno_anima import metakeys as mk
-from cogno_anima.types import wrote_for_the_contact
+from cogno_anima.types import committed_this_turn, wrote_for_the_contact
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
 from cogno_anima.stages.noumeno import Noumeno
 from cogno_anima.stages.superego import SuperegoStage
-from cogno_anima.tools import ToolDispatcher
+from cogno_anima.tools import ToolDispatcher, ToolPolicyDispatcher
 from cogno_anima.types import (IntentResult, NoumenoResult, PipelineContext,
                                StageMetrics, SuperegoResult)
 from cogno_synapse import Embedder
@@ -173,6 +173,125 @@ def _clarification_asked_by_the_contact(ctx: PipelineContext) -> bool:
         return False                       # a proposal awaiting "yes" is not a stuck turn
     voiced = ctx.superego_result.response if ctx.superego_result else ""
     return _ends_as_a_question(voiced)
+
+
+# ── the exception to the one-attempt budget: "you did not act" is not fixable by re-voicing ──
+#
+# The host cut ``max_self_corrections`` to 1 on every plan and the cost half of that cut holds
+# (measured over the box's fixed 11-turn scenario, `host 9a3e104` n=1 → `host 13b4c1d` n=4:
+# 368.481 tokens → 287.018 mean, −22%). What it also did, on 1 of those 4 runs, is lose a write
+# the contact had asked for — and the shape of that loss is the whole reason this branch exists:
+#
+#   X06  "registra uma despesa de R$45"
+#        the EGO called only `resolve_date` and asked for confirmation IN PROSE, touching no tool
+#        the judge rejected it, and the critique was RIGHT: "only asked for confirmation
+#        without recording"
+#        budget 1 → no pass left in which to obey the critique
+#        the voice shipped "não consegui registrar a despesa"; the expense was never recorded
+#
+# A rejection about the TEXT can be answered by the voice, which already runs with the critique
+# in hand. A rejection that says *nothing was done* cannot: the only thing that answers it is
+# DOING it, and doing happens in the EGO. That asymmetry — not the size of the budget — is what
+# this exception is scoped to, and it is why the gate below is about tools and not about words.
+#
+# The matched pair is on the box, same day, same persona, same goal, same critique, differing
+# only in how many EGO passes the budget allowed (both verified intact by the `xmin` era filter):
+#
+#   `turn_traces` id=1183 (host 9a3e104, budget ≥2)  attempt 1 = `resolve_date` only, rejected;
+#                                                     attempt 2 called `add_outcome`, the
+#                                                     confirmation gate HELD it → correct proposal
+#   `turn_traces` id=1198 (host 13b4c1d, budget 1)    attempt 1 identical, rejected,
+#                                                     `exhaustion_reason=judge_rejected_all`
+#
+# **Reach, measured before this was written, because a rule that fires everywhere is not a rule.**
+# Over the 1094 persisted traces (44 era-unverifiable by `xmin`, 757 carrying a judge ledger):
+# this gate fires on 149 of those 757 (19,7%), i.e. on 149 of the 347 attempt-1 rejections
+# (42,9%). In tokens that is 24,3% of what the cut saved handed back — the saving survives at
+# roughly three quarters, it does not evaporate. Historical yield on the same corpus: of the 145
+# firing turns that did get a second pass back then, 5 reached a task-mutating tool on it that
+# attempt 1 had not, and all 5 were proposals held by the confirmation gate. The live
+# calibration says the same thing from the other side: the "asked in prose instead of calling
+# the tool" shape is 1 run in 4. Frequent enough to be worth code, rare enough that ONE pass is
+# the right size of net.
+#
+# WHAT IT DELIBERATELY DOES NOT DO, and each of these is a twin in
+# `tests/unit/test_one_turn_to_act.py`:
+#
+#   * a turn that COMMITTED and was rejected gets NOTHING. Re-running after a write is the
+#     dangerous branch the cut closed, and it stays closed: that turn hands off, as before;
+#   * a rejected READ (no write on the table, or the EGO already reached for one) gets nothing —
+#     it voices with the critique, which is what a text rejection needs;
+#   * it never takes a turn past TWO EGO passes. So it is inert wherever the budget already
+#     allows a retry, which is the composition rule with a per-persona budget: the exception
+#     RAISES a budget of 1 to 2 and adds nothing to a budget of 2 or more.
+_ACTION_RETRY_CEILING = 2
+
+
+def _reached_for_a_write(ctx: PipelineContext) -> bool:
+    """Did the EGO CALL a tool the host declares mutating, on any pass of this turn?
+
+    Not "did it commit" — `ok` is deliberately absent. A write that was attempted and FAILED,
+    or was held at the confirmation gate, is still an executor that reached for the right
+    thing; the critique it drew is then about the attempt, not about its absence, and re-running
+    would re-issue a call the trace already shows. This is also the clause that answers the
+    escape hatches: a turn whose legitimate action WAS `transfer_persona` executed it, so it is
+    excluded here rather than by any judgement about what was on the table (measured over the
+    corpus: of the 40 turns whose first pass called `transfer_persona`, 0 reach this exception).
+
+    ``turn_executions`` accumulates across passes and ``ego_result`` is the single-shot floor —
+    the same two on-context sources, and the same failure discipline, as `committed_this_turn`.
+    """
+    for read in (lambda: getattr(ctx, "turn_executions", None) or [],
+                 lambda: getattr(getattr(ctx, "ego_result", None), "tools_executed", None) or []):
+        try:
+            if any(getattr(t, "tool_mutating", None) is True for t in read()):
+                return True
+        except Exception:      # noqa: BLE001 — a source that breaks must not cost the turn
+            continue
+    return False
+
+
+def _a_write_was_on_the_table(ctx: PipelineContext, dispatcher) -> bool:
+    """Was a host-declared mutating tool actually OFFERED on the pass that was rejected?
+
+    Read off ``EgoResult.tools_offered`` and not off ``dispatcher.tools_schema()``, because the
+    offered list is what the EGO could see AFTER the read-only mask: on a propose turn (gate A)
+    the writes were removed on purpose, the executor was RIGHT not to act, and re-running it
+    would only produce the same proposal a second time.
+
+    Fail-safe in the same direction as the confirmation gate: a dispatcher that declares no
+    policy classifies nothing, so nobody said a write was available and no pass is granted.
+    """
+    policy = dispatcher if isinstance(dispatcher, ToolPolicyDispatcher) else None
+    if policy is None:
+        return False
+    for name in (getattr(getattr(ctx, "ego_result", None), "tools_offered", None) or []):
+        try:
+            if policy.is_mutating(str(name)):
+                return True
+        except Exception:      # noqa: BLE001 — a policy that raises must not cost the turn
+            continue
+    return False
+
+
+def _owes_an_action(ctx: PipelineContext, dispatcher) -> bool:
+    """The judge rejected an ACTION the executor never reached for, and one was available.
+
+    ``committed_this_turn`` and not ``wrote_for_the_contact``: the question here is *"is
+    re-running this turn safe?"*, which is that predicate's own summary line. It is called
+    rather than re-derived even though `_reached_for_a_write` already excludes every mutating
+    call this turn's record shows, because it carries the one fact the record cannot: the host's
+    cross-context declaration for an attempt whose context died mid-turn — and, second, a host
+    whose ``side_effect`` and ``is_mutating`` disagree on a tool would otherwise slip past.
+    """
+    intent = ctx.intent
+    if intent is None or intent.intent_class != "ACTION_REQUEST":
+        return False
+    if committed_this_turn(ctx):
+        return False
+    if _reached_for_a_write(ctx):
+        return False
+    return _a_write_was_on_the_table(ctx, dispatcher)
 
 
 def _cut(text: str, limit: int) -> str:
@@ -719,8 +838,16 @@ class Pipeline:
                 **_attempt_draft(ctx.ego_result),
                 **_attempt_tools(ctx.ego_result),
             })
-            if judge.approved or attempt >= max_corrections:
+            if judge.approved:
                 break
+            if attempt >= max_corrections:
+                # The budget is spent. ONE more pass, and only for a rejection that no amount of
+                # re-voicing can answer — see `_owes_an_action` and the block above it. The
+                # ceiling is what keeps this a single extra pass rather than a loop, and what
+                # makes the exception inert on any budget that already allowed a retry.
+                if attempt >= _ACTION_RETRY_CEILING or not _owes_an_action(ctx, dispatcher):
+                    break
+                logger.debug("action_retry_granted attempt=%s", attempt)
             # rejected → this EGO attempt becomes retry history; feed the critique back
             if ctx.ego_result:
                 ctx.retry_metrics.append(ctx.ego_result.metrics)
