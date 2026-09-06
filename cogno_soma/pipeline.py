@@ -58,6 +58,16 @@ _TOOL_ARGS_CHARS = 160
 # overflow is counted, never silent.
 _TOOLS_PER_ATTEMPT = 30
 
+# The DRAFT this attempt was judged on. Wider than the critique because it is the thing the
+# critique is ABOUT — a couple of sentences explains a verdict, but only the full text lets a
+# reader decide whether the verdict was right. The number is the SAME as the host's
+# ``trace["ego"]["draft"]`` cut (``cogno_host/trace.py::_DRAFT_CHARS``, raised from 1200 to 4000
+# in the twin PR) on purpose: the two are a PAIR — "what the judge read on attempt N" against
+# "what the turn kept" — and a pair cut at two different lengths differs by the CUT, not by the
+# turn. The host re-cuts what arrives here at its own constant, so a soma running ahead of the
+# host is bounded by the host and never the other way round.
+_DRAFT_CHARS = 4000
+
 # ── the correction loop ran out: a fact about US, not about the CONTACT ──────────────────
 #
 # This name exists because ``needs_clarification`` was carrying two facts at once, and only
@@ -310,6 +320,46 @@ def _attempt_tools(ego_result) -> dict:
         if offered_cut:
             degraded["tools_offered_dropped"] = offered_cut
         return degraded
+
+
+def _attempt_draft(ego_result) -> dict:
+    """The TEXT this attempt was judged on — the critique's missing half.
+
+    The ledger has recorded the verdict and the critique PER ATTEMPT since #30, and what the
+    judge READ was never recorded per attempt at all: ``ctx.ego_result`` is REPLACED on every
+    retry, so the only draft that survives a turn is the LAST attempt's (the host persists it
+    as ``trace["ego"]["draft"]``). Every join of "verdict" to "text judged" therefore paired
+    attempt 1's critique with attempt 3's draft — silently, and with no field anywhere saying
+    the pair was false.
+
+    Measured on the demo box 2026-09-06, over the whole ``turn_traces`` table as it then stood
+    (1043 rows — it is a live table): 1294 ledger entries, 837 rejections, and **583 of those rejections (69.7%) belong to an
+    attempt whose draft is not persisted anywhere**. That artefact is not hypothetical either:
+    reading the survivor as if it were the judged text is what produced the finding "the judge
+    contradicts itself across attempts" — of 35 apparent contradictions, 25 (71%) were this
+    join and not the judge. The finding shrank from ~12-17% to ~1% once the pairs were dropped.
+
+    ``draft_len`` is the length of the ORIGINAL text, always, cut or not. A reader who cannot
+    tell "the executor wrote three lines" from "we kept the first 4000 characters of what it
+    wrote" has to assume the worst of every entry, which costs the same as having no field.
+    The one thing it does NOT measure is the host's own redaction (``redact_credentials``
+    replaces a live media token with a digest, which can shorten the text before it is cut):
+    this length is of the draft the EGO produced, so on such a turn ``len(draft) < draft_len``
+    can be a redaction rather than a cut.
+
+    Both keys are emitted on EVERY attempt, including one with no draft at all. An ABSENT key
+    means "a soma that predates this field" and an EMPTY string means "the executor produced
+    no text" — the same distinction ``tools_offered`` is documented to keep, for the same
+    reason: defaulting one to the other rebuilds the ambiguity the field exists to remove.
+
+    Deliberately NOT inside :func:`_attempt_tools`: that one wraps its display list in a
+    ``try`` because ``json.dumps`` of a tool's arguments genuinely raises, and a draft lost to
+    a neighbour's serialization failure would put the ledger straight back where it started.
+    Reading the property cannot raise (it is ``steps[-1].assistant_text`` on a pydantic model),
+    exactly like the ``committed`` bit that is computed outside that same ``try``.
+    """
+    draft = str(getattr(ego_result, "draft", "") or "")
+    return {"draft": draft[:_DRAFT_CHARS], "draft_len": len(draft)}
 
 
 logger = logging.getLogger(__name__)
@@ -603,10 +653,15 @@ class Pipeline:
             if not isinstance(ledger, list):
                 ledger = []
                 ctx.metadata[mk.JUDGE_ATTEMPTS] = ledger
+            # The draft goes in BESIDE the critique, from the SAME `ctx.ego_result` this
+            # attempt's judge was handed a moment ago — because the two are one fact, and
+            # recording half of it is what made every reading of the other half unreliable
+            # (see `_attempt_draft`).
             ledger.append({
                 "attempt": attempt,
                 "approved": bool(judge.approved),
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
+                **_attempt_draft(ctx.ego_result),
                 **_attempt_tools(ctx.ego_result),
             })
             if judge.approved or attempt >= max_corrections:

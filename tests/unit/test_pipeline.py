@@ -668,6 +668,146 @@ async def test_each_attempt_records_the_surface_it_was_OFFERED(
         "the masked attempt inherited the earlier surface — the entries are a per-attempt diff"
 
 
+# ── the draft the judge READ, per attempt ────────────────────────────────────────────────
+#
+# `_build_judge_prompt` (cogno_anima.stages.superego) renders the executor's text as
+# `# EGO draft\n{draft}\n\n{criteria}`. The tests below read the draft back OUT of the prompt
+# the judge was actually handed, instead of comparing against a string the test wrote down:
+# a value written in the test proves the recorder works, not that the record matches what was
+# judged, and the whole defect this closes is precisely a record that did not.
+_JUDGE_DRAFT_HEADER = "# EGO draft\n"
+
+
+def _draft_the_judge_read(prompt: str) -> str:
+    """The draft section of a judge prompt, sliced off the real rendered prompt."""
+    assert _JUDGE_DRAFT_HEADER in prompt, \
+        "the judge prompt no longer carries an EGO draft section — this test compares nothing"
+    return prompt.split(_JUDGE_DRAFT_HEADER, 1)[1].split("\n\n", 1)[0]
+
+
+class _JudgePromptRecorder:
+    """A judge backend that KEEPS every prompt it was handed and answers by script.
+
+    Not a fake stage: the REAL `SuperegoStage.evaluate` runs on top of it, so the prompts
+    collected here are the ones anima actually built for each attempt."""
+
+    model = "recorder"
+
+    def __init__(self, approvals) -> None:
+        self.prompts: list[str] = []
+        self._approvals = list(approvals)
+
+    async def generate(self, system: str, prompt: str):
+        self.prompts.append(prompt)
+        n = len(self.prompts)
+        approved = self._approvals[min(n - 1, len(self._approvals) - 1)]
+        return ('{"approved": true}' if approved
+                else '{"approved": false, "critique": "attempt %d fell short"}' % n), 0, 0
+
+
+async def test_each_attempt_records_the_draft_the_judge_ACTUALLY_read(
+        stub_embedder, stub_backend, dispatcher):
+    """The critique has been per-attempt since #30; the TEXT it is about was never recorded.
+
+    `ctx.ego_result` is REPLACED on every retry, so the only draft that survives a turn is the
+    LAST attempt's (the host persists it as `trace["ego"]["draft"]`). Anything that joined a
+    verdict to the text judged was therefore pairing attempt 1's critique with attempt 3's
+    draft — silently, with no field anywhere saying the pair was false.
+
+    Measured on the demo box 2026-09-06 over the whole `turn_traces` table as it then stood
+    (1043 rows — a live table): 1294 ledger entries, 837 rejections, 583 of them (69.7%) on an attempt whose draft is not
+    persisted anywhere. That join is what produced the finding "the judge contradicts itself
+    across attempts": of 35 apparent contradictions, 25 (71%) were the artefact and not the
+    judge — the finding shrank from ~12-17% to ~1% once the false pairs were dropped.
+
+    The assertion compares each recorded draft against **the judge prompt of the same
+    attempt**, not against a value written here: with a hardcoded expectation, a recorder that
+    backfilled every entry from the surviving attempt would still be green whenever the drafts
+    happened to agree, which is the exact bug class this closes. The drafts DIFFER per attempt
+    for the same reason (see `_per_attempt` in conftest, and the two ledger tests above whose
+    first cut this same mutation survived).
+    """
+    from cogno_anima.stages.superego import SuperegoStage
+
+    drafts = ["I have booked the 14:00 slot for you.",
+              "Correction: it is the 15:00 slot that I reserved.",
+              "Nothing to book — that appointment already exists on the calendar."]
+    judge = _JudgePromptRecorder([False, False, True])
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(drafts=drafts), superego=SuperegoStage())
+    ctx = await pipe.run_turn(
+        _ctx(), _cfg(stub_backend, judge_backend=judge, max_corrections=3),
+        dispatcher=dispatcher)
+
+    attempts = ctx.metadata["judge_attempts"]
+    assert [a["attempt"] for a in attempts] == [1, 2, 3]
+    assert [a["approved"] for a in attempts] == [False, False, True]
+    assert len(judge.prompts) == 3, "one judge call per attempt — the pairing needs both halves"
+
+    for entry, prompt in zip(attempts, judge.prompts):
+        judged = _draft_the_judge_read(prompt)
+        assert entry["draft"] == judged, (
+            "attempt %s recorded a draft that is NOT the text its own judge was shown"
+            % entry["attempt"])
+        assert entry["draft_len"] == len(judged)
+
+    # …and the discriminating half, stated as its own assertion: the earlier entries must not
+    # be the surviving attempt's text. Without this, "recorded per attempt" and "backfilled
+    # from the last one" are the same green whenever the drafts coincide.
+    assert attempts[0]["draft"] != attempts[2]["draft"]
+    assert attempts[1]["draft"] != attempts[2]["draft"]
+    assert attempts[2]["draft"] not in judge.prompts[0], \
+        "the last attempt's draft cannot have been in the FIRST attempt's judge prompt"
+
+
+async def test_the_draft_is_cut_and_says_how_long_the_original_was(
+        stub_embedder, stub_backend, dispatcher):
+    """Same rule as the critique and the tool results — and one field more, which is the point.
+
+    A cut that does not announce itself is worse than a short field: the reader cannot tell
+    "the executor wrote three lines" from "we kept the first N characters of what it wrote",
+    so they have to assume the worst of every entry. Measured on the host side, where the
+    equivalent cut is 1200: 27 of the 975 persisted drafts sit at EXACTLY 1200 characters, and
+    nothing in the row says how much text is missing — the maximum length in the whole table
+    is 1200, i.e. the ceiling is the only thing the corpus can report about them.
+
+    `draft_len` is emitted ALWAYS, not only when the cut fires: a length that appears only on
+    truncated entries is a truncation flag wearing a length's name, and a reader still cannot
+    ask "how long are our drafts" of the entries that were not cut."""
+    from cogno_soma.pipeline import _DRAFT_CHARS
+
+    long_draft = "x" * (_DRAFT_CHARS * 2 + 7)
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(drafts=[long_draft]),
+                     superego=FakeSuperego(approve=True))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend), dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]
+    assert len(rec["draft"]) == _DRAFT_CHARS
+    assert rec["draft_len"] == _DRAFT_CHARS * 2 + 7, \
+        "the cut entry must carry the ORIGINAL length — that is what tells the reader it saw less"
+
+    # A draft that fits is still measured: the field is a LENGTH, not a truncation flag.
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
+                     ego=FakeEgo(drafts=["short enough"]),
+                     superego=FakeSuperego(approve=True))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend), dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]
+    assert rec["draft"] == "short enough" and rec["draft_len"] == len("short enough")
+
+
+async def test_an_attempt_with_no_draft_still_carries_the_keys(
+        stub_embedder, stub_backend, dispatcher):
+    """An ABSENT key means "a soma that predates this field"; an EMPTY string means "the
+    executor produced no text". Those are different facts and the host's trace is documented to
+    keep them apart (it emits the field only when the ledger carries it), so this side must
+    never drop the key to say "empty" — the same rule `tools_offered` already lives by."""
+    pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"), ego=FakeEgo(),
+                     superego=FakeSuperego(approve=True))
+    ctx = await pipe.run_turn(_ctx(), _cfg(stub_backend), dispatcher=dispatcher)
+    rec = ctx.metadata["judge_attempts"][0]
+    assert "draft" in rec and rec["draft"] == "" and rec["draft_len"] == 0
+
+
 async def test_a_tools_result_and_args_are_truncated_in_the_record(
         stub_embedder, stub_backend, dispatcher):
     """Same rule as the critique: this rides in metadata the host persists, and a tool result
