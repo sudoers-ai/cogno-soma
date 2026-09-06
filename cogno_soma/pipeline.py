@@ -513,6 +513,49 @@ class Pipeline:
                                      STOP_JUDGE_EXHAUSTED, kind)
                         # no on_commit: nothing was committed
                     else:
+                        # ── A REJECTED COMMIT GOES TO A HUMAN, AND THE REASON IS THAT WE
+                        #    CANNOT TELL A BAD WRITE FROM A BAD SENTENCE ────────────────
+                        #
+                        # The obvious loosening is to split this branch in two: a rejection
+                        # about the TEXT ("you should have offered an alternative") lets the
+                        # voice run like the branch above, and only a rejection that names a
+                        # WRONG WRITE — wrong object, wrong value — burns a human. The saving
+                        # is real in principle: this turn already has a voiced continuation
+                        # available and hands off instead.
+                        #
+                        # It is not built, and the reason is a MEASUREMENT rather than a
+                        # preference. Deciding which kind of rejection this is would mean
+                        # classifying `judge.critique`, and the critique's prose is precisely
+                        # the artefact that has been measured unreliable: over seven pairs
+                        # checked word by word in production the critique PRESCRIBES what the
+                        # draft already did ("should have asked for the full name", about a
+                        # draft that asks for it), and in the worst of them the draft says
+                        # *there is no tool to record this* while the critique accuses it of
+                        # "fabricating success by claiming it recorded". Floor 12% of
+                        # rejections, ~17% by hand. Hanging an ESCALATION decision on that
+                        # text would put the least reliable signal in the pipeline in charge
+                        # of whether a person is called.
+                        #
+                        # The alternative the coordinator named — take the discrimination
+                        # from the TRACE (the call arguments in `ctx.turn_executions` against
+                        # what was asked: `noumeno.preserved_terms`, `intent.constraints`,
+                        # `intent.negation`) — was evaluated and DEGENERATES here. The trace
+                        # records what was written, never whether it was the right thing to
+                        # write; the only comparison available is vacuous on the turns it
+                        # would have to decide (most carry no preserved term at all), and a
+                        # vacuous guard green-lights everything, which is the one failure this
+                        # branch exists to prevent. Nor is the population big enough to
+                        # validate a classifier against: over the 750 persisted turns that
+                        # carry a judge verdict, rejected-AND-committed is **1**.
+                        #
+                        # So the default is the safe one, and it is the same one as before:
+                        # ambiguity hands off. The saving lives entirely in the branch above
+                        # (no commit → voice), which is where the correction budget was cut;
+                        # nothing had to be risked here to collect it.
+                        #
+                        # `committed` here is `wrote_for_the_contact`, so a turn whose only
+                        # side-effecting call was routing between OUR personas is NOT in this
+                        # branch — it voices. That is why the population is 1 and not 7.
                         ctx.needs_handoff = True
                         ctx.stop_reason = "human_handoff"
                         logger.debug("turn_handoff stop_reason=human_handoff")
