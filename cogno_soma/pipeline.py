@@ -513,6 +513,59 @@ class Pipeline:
                                      STOP_JUDGE_EXHAUSTED, kind)
                         # no on_commit: nothing was committed
                     else:
+                        # ── A REJECTED COMMIT GOES TO A HUMAN, AND THE REASON IS THAT WE
+                        #    CANNOT TELL A BAD WRITE FROM A BAD SENTENCE ────────────────
+                        #
+                        # The obvious loosening is to split this branch in two: a rejection
+                        # about the TEXT ("you should have offered an alternative") lets the
+                        # voice run like the branch above, and only a rejection that names a
+                        # WRONG WRITE — wrong object, wrong value — burns a human. The saving
+                        # is real in principle: this turn already has a voiced continuation
+                        # available and hands off instead.
+                        #
+                        # It is not built, and the reason is COUNTED rather than argued.
+                        #
+                        # Deciding which kind of rejection this is means classifying
+                        # `judge.critique`, and how well that prose describes the execution
+                        # it judged is UNMEASURED — in either direction. It is not merely
+                        # that nobody has looked: the comparison cannot be formed from what
+                        # is persisted, because critiques are kept PER ATTEMPT and the draft
+                        # only for the LAST one, so a critique and the draft it was written
+                        # about are not, today, in the same record. (A reading that claimed
+                        # otherwise was withdrawn by its own author on 2026-09-06 for exactly
+                        # that reason. Nothing replaces it here; the frente that would
+                        # measure it starts by persisting the draft per attempt.)
+                        #
+                        # An escalation decision would therefore rest on an artefact whose
+                        # fitness for the job nobody has established — which is not a claim
+                        # that the critique is bad, and is a good enough reason not to put it
+                        # in charge of whether a person is called.
+                        #
+                        # The alternative the coordinator named — take the discrimination
+                        # from the TRACE (the call arguments in `ctx.turn_executions` against
+                        # what was asked: `noumeno.preserved_terms`, `intent.constraints`,
+                        # `intent.negation`) — was evaluated and DEGENERATES here. The trace
+                        # records what was written, never whether it was the right thing to
+                        # write; the only comparison available is vacuous on the turns it
+                        # would have to decide (most carry no preserved term at all), and a
+                        # vacuous guard green-lights everything, which is the one failure this
+                        # branch exists to prevent.
+                        #
+                        # And the decisive count, which needs no reading of anybody's prose:
+                        # there is NO POPULATION to validate a classifier against. Over the
+                        # 750 persisted turns that carry a judge verdict, rejected-AND-
+                        # committed is **1**. A classifier validated against n=1 does not
+                        # produce a decision, it produces false confidence — and it would be
+                        # placed on the path that calls a human.
+                        #
+                        # So the default is the safe one, and it is the same one as before:
+                        # ambiguity hands off. The saving lives entirely in the branch above
+                        # (no commit → voice), which is where the correction budget was cut;
+                        # nothing had to be risked here to collect it.
+                        #
+                        # `committed` here is `wrote_for_the_contact`, so a turn whose only
+                        # side-effecting call was routing between OUR personas is NOT in this
+                        # branch — it voices. That is why the population is 1 and not 7.
                         ctx.needs_handoff = True
                         ctx.stop_reason = "human_handoff"
                         logger.debug("turn_handoff stop_reason=human_handoff")
