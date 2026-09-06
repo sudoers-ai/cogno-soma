@@ -573,18 +573,25 @@ class Pipeline:
                         # is real in principle: this turn already has a voiced continuation
                         # available and hands off instead.
                         #
-                        # It is not built, and the reason is a MEASUREMENT rather than a
-                        # preference. Deciding which kind of rejection this is would mean
-                        # classifying `judge.critique`, and the critique's prose is precisely
-                        # the artefact that has been measured unreliable: over seven pairs
-                        # checked word by word in production the critique PRESCRIBES what the
-                        # draft already did ("should have asked for the full name", about a
-                        # draft that asks for it), and in the worst of them the draft says
-                        # *there is no tool to record this* while the critique accuses it of
-                        # "fabricating success by claiming it recorded". Floor 12% of
-                        # rejections, ~17% by hand. Hanging an ESCALATION decision on that
-                        # text would put the least reliable signal in the pipeline in charge
-                        # of whether a person is called.
+                        # It is not built, and the reason is COUNTED rather than argued.
+                        #
+                        # Deciding which kind of rejection this is means classifying
+                        # `judge.critique`, and how well that prose describes the execution
+                        # it judged is UNMEASURED — in either direction. An earlier version
+                        # of this comment claimed the opposite, citing seven hand-checked
+                        # pairs; that reading was WITHDRAWN by its own author on 2026-09-06,
+                        # because the pair could not be formed from what was persisted:
+                        # critiques were kept PER ATTEMPT and the draft only for the LAST
+                        # one, so a critique and the draft it judged were not in the same
+                        # record (`_attempt_draft`, added by #41, is what closes that — from
+                        # now ON; it builds no history for the turns already run).
+                        #
+                        # Nothing replaces the withdrawn number, because nothing legitimate
+                        # has been measured — not for the claim and not against it. So an
+                        # escalation decision here would rest on an artefact whose fitness
+                        # for the job nobody has established. That is not a claim that the
+                        # critique is bad; it is a reason not to put it in charge of whether
+                        # a person is called.
                         #
                         # The alternative the coordinator named — take the discrimination
                         # from the TRACE (the call arguments in `ctx.turn_executions` against
@@ -594,9 +601,14 @@ class Pipeline:
                         # write; the only comparison available is vacuous on the turns it
                         # would have to decide (most carry no preserved term at all), and a
                         # vacuous guard green-lights everything, which is the one failure this
-                        # branch exists to prevent. Nor is the population big enough to
-                        # validate a classifier against: over the 750 persisted turns that
-                        # carry a judge verdict, rejected-AND-committed is **1**.
+                        # branch exists to prevent.
+                        #
+                        # And the decisive count, which needs no reading of anybody's prose:
+                        # there is NO POPULATION to validate a classifier against. Over the
+                        # 750 persisted turns that carry a judge verdict, rejected-AND-
+                        # committed is **1**. A classifier validated against n=1 does not
+                        # produce a decision, it produces false confidence — and it would be
+                        # placed on the path that calls a human.
                         #
                         # So the default is the safe one, and it is the same one as before:
                         # ambiguity hands off. The saving lives entirely in the branch above
