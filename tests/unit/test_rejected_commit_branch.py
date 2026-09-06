@@ -1,9 +1,9 @@
 """Where a JUDGE REJECTION goes, under the production correction budget of ONE attempt.
 
 The host cut ``max_self_corrections`` to 1 on every plan (``cogno_host/plans.py``): over 586
-real execution turns the retries were 46.2% of the branch's tokens, of the 88 turns they
-approved only 3 wrote anything, and of 30 rejections read by hand 22 were CORRECT executions
-the judge refused while all 6 real defects showed up on attempt 1.
+real execution turns the retries were 46.2% of the branch's tokens, and of the 88 turns they
+approved only 3 wrote anything. The cut rests on that COST; what the extra attempts CATCH is
+unmeasured and is not claimed anywhere in this file.
 
 That makes THIS fork hot. It used to be reached after two or three attempts; now almost every
 rejection reaches it on the first, so which side a turn falls on stops being an edge case:
@@ -24,17 +24,27 @@ MUTATION (one per property):
 
 **What deliberately does NOT change, and it is the finding rather than an omission.** The
 loosening on the table was "a rejection about the TEXT voices; only a rejection naming a WRONG
-WRITE hands off". Deciding that means classifying ``judge.critique``, and the critique's prose
-is the measured-unreliable artefact: in seven production pairs checked word by word it
-PRESCRIBES what the draft already did, and in the worst one the draft says there is no tool to
-record the request while the critique accuses it of fabricating that it recorded (floor 12% of
-rejections, ~17% by hand). The trace-side alternative — call arguments against
-``noumeno.preserved_terms`` / ``intent.constraints`` / ``intent.negation`` — degenerates: the
-trace says what was written, never whether writing it was right, and the comparison is vacuous
-on the turns it would have to decide. Nor is there data to validate a classifier on: over the
-750 persisted turns carrying a judge verdict, rejected-AND-committed is **1**. So ambiguity
-keeps handing off, the saving stays in the branch where the budget was cut, and the twin for
-"commit + text-only rejection → voice" is deliberately absent rather than guessed at.
+WRITE hands off". It is not built, for two reasons, and neither of them is a claim about the
+judge:
+
+* **there is no population to validate a classifier against.** Over the 750 persisted turns
+  carrying a judge verdict, rejected-AND-committed is **1**. A classifier validated against n=1
+  produces false confidence, not a decision — on the path that calls a human;
+* **the trace-side alternative degenerates.** Call arguments against ``noumeno.preserved_terms``
+  / ``intent.constraints`` / ``intent.negation``: the trace says what was written, never whether
+  writing it was right, and the comparison is vacuous on the turns it would have to decide. A
+  vacuous guard green-lights everything.
+
+How faithfully ``judge.critique`` describes the execution it judged is **unmeasured, in either
+direction**. An earlier version of this docstring claimed otherwise, citing seven hand-checked
+pairs; that reading was **withdrawn by its own author on 2026-09-06**, because the pair could not
+be formed from what was persisted — critiques were kept PER ATTEMPT and the draft only for the
+LAST one, so the two halves were never in the same record. ``_attempt_draft`` (#41) closes that
+from now ON; it builds no history for the turns already run. Nothing replaces the withdrawn
+number here, because nothing legitimate has been measured — not for the claim, not against it.
+
+So ambiguity keeps handing off, the saving stays in the branch where the budget was cut, and the
+twin for "commit + text-only rejection → voice" is deliberately absent rather than guessed at.
 """
 
 from cogno_anima.types import ToolExecution
