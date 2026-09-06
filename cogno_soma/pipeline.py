@@ -34,7 +34,8 @@ from cogno_anima.stages.ner import IntentAnalyzer
 from cogno_anima.stages.noumeno import Noumeno
 from cogno_anima.stages.superego import SuperegoStage
 from cogno_anima.tools import ToolDispatcher
-from cogno_anima.types import PipelineContext, StageMetrics, SuperegoResult
+from cogno_anima.types import (IntentResult, NoumenoResult, PipelineContext,
+                               StageMetrics, SuperegoResult)
 from cogno_synapse import Embedder
 
 from cogno_soma.config import TurnConfig
@@ -314,6 +315,39 @@ def _attempt_tools(ego_result) -> dict:
 logger = logging.getLogger(__name__)
 
 
+def _seat_noumeno(result: NoumenoResult, ctx: PipelineContext) -> NoumenoResult:
+    """A caller-supplied NOUMENO result, seated on THIS turn.
+
+    Copied, never aliased: a config is built once and reused, so seating the caller's object
+    would let one turn's stamped ``seq`` and one turn's text leak into the next.
+
+    Three fields are taken from the context rather than from the result, because they are
+    facts about the turn and not decisions the caller gets to make: ``original`` IS
+    ``ctx.user_input`` (that is what the real stage sets it to), ``rewritten`` falls back to
+    it the way the stage falls back when the rewriter returns nothing, and ``language``
+    honours ``ctx.force_language``. A stand-in that hardcoded them could claim the turn
+    carried text nobody put in it — and everything downstream, including the stored
+    transcript, would believe it. A non-empty value the caller DID set is kept: the fallback
+    fills a gap, it does not overrule.
+    """
+    seated = result.model_copy(deep=True)
+    seated.original = ctx.user_input
+    seated.rewritten = seated.rewritten or ctx.user_input
+    seated.language = seated.language or (ctx.force_language or "")
+    return seated
+
+
+def _seat_intent(result: IntentResult, ctx: PipelineContext) -> IntentResult:
+    """A caller-supplied NER result, seated on THIS turn — copied for the same reason.
+
+    ``langue`` is inherited from the NOUMENO exactly as the real stage inherits it, so the two
+    stand-ins cannot disagree about the language of a turn they both describe.
+    """
+    seated = result.model_copy(deep=True)
+    seated.langue = seated.langue or (ctx.noumeno.language if ctx.noumeno else "")
+    return seated
+
+
 def _zero_metrics(stage: str = "superego_voice") -> StageMetrics:
     """A no-cost metrics row for a synthesized (non-LLM) terminal response."""
     return StageMetrics(stage=stage, elapsed_ms=0.0, tokens_in=0, tokens_out=0, model="none")
@@ -362,10 +396,19 @@ class Pipeline:
             await self._fire(hooks.before_turn, ctx)
 
             # ── perception + routing ──────────────────────────────────
-            ctx = await self._noumeno.process(ctx, cfg.noumeno_backend or cfg.gen_backend)
+            # A precomputed result on the config replaces the stage entirely (see
+            # `TurnConfig.noumeno_result`): the turn the AGENT opens has no utterance to
+            # perceive, so there is nothing for a model — or an embedder — to be asked about.
+            if cfg.noumeno_result is not None:
+                ctx.noumeno = _seat_noumeno(cfg.noumeno_result, ctx)
+            else:
+                ctx = await self._noumeno.process(ctx, cfg.noumeno_backend or cfg.gen_backend)
             _stamp(ctx, ctx.noumeno.metrics if ctx.noumeno else None)
             await self._fire(hooks.after_noumeno, ctx)
-            ctx = await self._ner.process(ctx, cfg.ner_backend or cfg.gen_backend)
+            if cfg.intent_result is not None:
+                ctx.intent = _seat_intent(cfg.intent_result, ctx)
+            else:
+                ctx = await self._ner.process(ctx, cfg.ner_backend or cfg.gen_backend)
             _stamp(ctx, ctx.intent.metrics if ctx.intent else None)
             await self._fire(hooks.after_ner, ctx)
             ctx = await self._id.process(ctx, self._embedder)

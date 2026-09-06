@@ -11,6 +11,8 @@ client, billing or a persona store.
 from cogno_soma.config import TurnConfig
 from cogno_soma.errors import SomaError, StopPipeline
 from cogno_soma.hooks import HookFn, Hooks
+from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
+                                opening_noumeno, opening_perception)
 from cogno_soma.pipeline import Pipeline, STOP_JUDGE_EXHAUSTED
 from cogno_soma.session import SessionRunner
 
@@ -27,6 +29,12 @@ __all__ = [
     # would be a second definition of a contract that has already been wrong once.
     "STOP_JUDGE_EXHAUSTED",
     "SomaError",
+    # The turn the AGENT opens: perception stand-ins for a turn nobody spoke.
+    "opening_perception",
+    "opening_noumeno",
+    "opening_intent",
+    "OPENING_MODEL",
+    "OPENING_INTENT",
 ]
 
 __version__ = "0.1.0"

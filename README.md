@@ -110,6 +110,42 @@ Fire order: `before_turn` → NOUMENO → `after_noumeno` → NER → `after_ner
 `after_id` → gates → EGO⇄SUPEREGO (`on_rollback` per retry, `on_commit` on
 approval) → `after_ego` → voice → `after_superego` → `after_turn`.
 
+## The turn the agent opens
+
+A proactive turn has no utterance. What you hold is your OWN directive ("open the conversation
+with Ana, mention the checkup"), and running the two stages that exist to understand a *person*
+over it is not wasteful but wrong — five ways, each one a stage doing its job correctly on the
+wrong input:
+
+| stage | what it does to your directive |
+| --- | --- |
+| NER (PII) | classifies YOUR words; "checkup" reads as `HEALTH_DATA` → CRITICAL → the ID blocks the turn and the agent never opens |
+| ID (goal) | files the directive as the CONTACT's goal, so their first reply reads as a topic change |
+| SUPEREGO (scope) | judges whether your own sentence is on-topic for your deployment |
+| NOUMENO (drift) | measures every drift number for the turn against your prompt |
+| NOUMENO (continuity) | embeds your internal marker against the contact's last message to decide `change_subject` |
+
+So hand the two results in and the pipeline seats them — no LLM, no embedder, no tokens:
+
+```python
+import dataclasses
+from cogno_soma import opening_perception
+
+cfg = dataclasses.replace(cfg, scope_prompt="", **opening_perception())
+ctx.user_input = "[OPENING]"          # a marker, not words you put in the contact's mouth
+ctx = await pipe.run_turn(ctx, cfg, dispatcher=dispatcher)
+```
+
+The EGO, the judge and the voice still run for real — the judge is what stops an opening from
+inventing the history it greets someone with — and the scope guard goes off because a guard
+whose input is your own directive can only ever block you.
+
+`TurnConfig.noumeno_result` / `intent_result` are the general seam; `opening_perception()` is
+the one set of values this library ships for it. **What is a decision comes from the result;
+what is a fact about the turn comes from the context** — `original` is `ctx.user_input`,
+`language` is `ctx.force_language`, `langue` is inherited from the NOUMENO — so a stand-in can
+never claim the turn carried text nobody put in it.
+
 ## Token accounting
 
 Every LLM call a turn makes — NOUMENO, NER, the scope guard, **each** judge

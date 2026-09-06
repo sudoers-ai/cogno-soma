@@ -28,7 +28,7 @@ from cogno_synapse import LLMBackend
 from cogno_soma.hooks import Hooks
 
 if TYPE_CHECKING:
-    from cogno_anima.types import PipelineContext
+    from cogno_anima.types import IntentResult, NoumenoResult, PipelineContext
 
 # Complexity-based escalation: given the running turn (its ``id_result.complexity``) and a stage
 # name, return a stronger backend to run that stage on, or None to keep the configured one. The
@@ -69,6 +69,26 @@ class TurnConfig:
     # (most turns) costs the cheap model, and the strong model is paid only on rejects.
     # None → single-tier (judge_backend or gen_backend), identical to before.
     judge_fast_backend: Optional[LLMBackend] = None
+    # ── Precomputed perception (a turn nobody spoke) ─────────────────────────────────────
+    # Set either of these and the pipeline SEATS it instead of running that stage: no backend
+    # is consulted, no embedder is called, no tokens are spent. It exists for the turn the
+    # AGENT opens (see ``cogno_soma.opening``), where the text the host holds is its own
+    # directive and running the two stages that exist to understand a PERSON over it is not
+    # wasteful but wrong — the NER reads OUR words for PII and blocks the turn, the ID files
+    # them as the CONTACT's goal, and the NOUMENO measures drift and subject continuity
+    # against a sentence nobody wrote.
+    #
+    # Unlike everything else on this dataclass these are PER TURN, and that is deliberate: the
+    # host already builds each turn's config with ``dataclasses.replace``, which is where the
+    # opening's ``scope_prompt=""`` and voice section are set too, so the opening arrives as
+    # one substitution instead of a second channel into ``run_turn``.
+    #
+    # The fields that are FACTS about the turn are not read from here: ``original``,
+    # ``rewritten`` and ``language`` come from ``ctx.user_input``/``ctx.force_language``, and
+    # ``langue`` from the seated NOUMENO, exactly as the real stages take them. A stand-in can
+    # state decisions; it cannot claim the turn carried text it did not.
+    noumeno_result: Optional["NoumenoResult"] = None   # None → run the NOUMENO stage
+    intent_result: Optional["IntentResult"] = None     # None → run the NER stage
     # Host escalation policy consulted AFTER the ID computes complexity: a hard task can bump the
     # EGO onto a stronger model for this turn. None → no escalation (the configured backends run).
     escalate: Optional[EscalateFn] = None
