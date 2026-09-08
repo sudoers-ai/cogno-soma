@@ -332,7 +332,7 @@ async def test_pii_hint_survives_state_round_trip(stub_embedder, stub_backend):
     pipe = _pipe(stub_embedder)
     pipe._ner = FakeNER(pii=["PHONE"])
     sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
-    await sess.run("meu telefone é (11) 98482-1841")
+    await sess.run("meu telefone é (11) 97000-1111")
     assert sess.state["carry"]["pii_session_hint"] is True
 
     seen: list = []
