@@ -41,6 +41,7 @@ from cogno_synapse import Embedder
 from cogno_soma.config import TurnConfig
 from cogno_soma.errors import StopPipeline
 from cogno_soma.hooks import Hooks, HookFn
+from cogno_soma.trace_cuts import ToolResultLimitFn, cut_with_mark, resolve_limit
 # Judge critiques are model prose; the whole point is to make a red check explainable, and a
 # couple of sentences does that. Unbounded, they ride into whatever the host persists.
 _CRITIQUE_CHARS = 400
@@ -49,7 +50,14 @@ _CRITIQUE_CHARS = 400
 # and the arguments can embed user text, so both are stringified and cut before they ride in
 # persisted metadata. Small on purpose — the question this answers is "which rows did the
 # rejected attempt touch", not "what did the tool say in full".
-_TOOL_RESULT_CHARS = 200
+#
+# The RESULT's ceiling left this file: it is one half of a pair with the host reader's, the pair
+# was 200-against-240 (the writer BELOW the reader, so the reader's ceiling never bit on the
+# ledger and its cut mark never appeared there), and the two halves now share one home —
+# ``cogno_soma.trace_cuts``, whose docstring carries the argument. The arguments' ceiling stays
+# here: it answers a different question (the argument NAMES the row; 160 characters of JSON is
+# the deliberate answer), the host applies no mark of its own to that field, and marking one
+# side of an unmarked pair would rebuild the asymmetry in mirror image.
 _TOOL_ARGS_CHARS = 160
 # Entries per attempt. The per-field cuts bound each entry; nothing bounded the LIST — and the
 # real ceiling is not the default max_steps: premium plans inject ego_max_steps=25, calls per
@@ -375,7 +383,7 @@ def _stamp(ctx, metrics, *, attempt: int = 0, prompt: str = "") -> None:
         logger.debug("stage_stamp_failed", exc_info=True)
 
 
-def _attempt_tools(ego_result) -> dict:
+def _attempt_tools(ego_result, limit_fn: "Optional[ToolResultLimitFn]" = None) -> dict:
     """One attempt's executions: the POLICY bit, then the bounded display list.
 
     `committed` is deliberately computed FIRST, outside the try, over the FULL list: it is the
@@ -421,7 +429,11 @@ def _attempt_tools(ego_result) -> dict:
              "args": _cut(json.dumps(t.arguments or {}, ensure_ascii=False, default=str),
                           _TOOL_ARGS_CHARS),
              "ok": bool(t.ok), "side_effect": bool(t.side_effect),
-             "result": _cut(_outcome(t), _TOOL_RESULT_CHARS)}
+             # Per TOOL, because the ceiling is: the host's policy gives the schedule reads a
+             # bigger one, and this is the same function it will apply when it re-cuts what
+             # arrives — so the two halves of the pair land at the same number by construction
+             # instead of by a test. Unset → `trace_cuts.TOOL_RESULT_CHARS`.
+             "result": cut_with_mark(_outcome(t), resolve_limit(t.tool, limit_fn))}
             for t in execs[:_TOOLS_PER_ATTEMPT]
         ]}
         if len(execs) > _TOOLS_PER_ATTEMPT:
@@ -836,7 +848,7 @@ class Pipeline:
                 "approved": bool(judge.approved),
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
                 **_attempt_draft(ctx.ego_result),
-                **_attempt_tools(ctx.ego_result),
+                **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
             })
             if judge.approved:
                 break
