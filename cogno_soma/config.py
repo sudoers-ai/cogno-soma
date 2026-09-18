@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from cogno_synapse import LLMBackend
 
 from cogno_soma.hooks import Hooks
+from cogno_soma.trace_cuts import ToolResultLimitFn
 
 if TYPE_CHECKING:
     from cogno_anima.types import IntentResult, NoumenoResult, PipelineContext
@@ -92,3 +93,14 @@ class TurnConfig:
     # Host escalation policy consulted AFTER the ID computes complexity: a hard task can bump the
     # EGO onto a stronger model for this turn. None → no escalation (the configured backends run).
     escalate: Optional[EscalateFn] = None
+    # How many characters of ONE tool's result survive into the per-attempt judge ledger, per
+    # tool NAME. Same shape as ``escalate`` and for the same reason: which tools deserve a
+    # bigger ceiling is a catalog of tool names, and a catalog of tool names is the host's
+    # business — soma ships the mechanism (``cogno_soma.trace_cuts``) and consults the policy.
+    #
+    # The host that persists this ledger re-cuts it at its OWN ceiling, so the right value here
+    # is that same function: one number in the deployment instead of two, and a pair that can
+    # no longer differ by the CUT rather than by the turn. None → ``TOOL_RESULT_CHARS``, which
+    # is floored at the reader's base so the cheaper failure (writer below reader, the reader's
+    # ceiling never biting, the cut going unmarked) cannot be configured back in.
+    tool_result_limit: Optional[ToolResultLimitFn] = None

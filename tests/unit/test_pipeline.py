@@ -814,11 +814,12 @@ async def test_a_tools_result_and_args_are_truncated_in_the_record(
     is unbounded model-facing prose while arguments can embed the user's own text."""
     from cogno_anima.types import ToolExecution
 
-    from cogno_soma.pipeline import _TOOL_ARGS_CHARS, _TOOL_RESULT_CHARS
+    from cogno_soma.pipeline import _TOOL_ARGS_CHARS
+    from cogno_soma.trace_cuts import TOOL_RESULT_CHARS, cut_dropped, was_cut
 
     huge = ToolExecution(tool="notify_user",
                          arguments={"message": "x" * (_TOOL_ARGS_CHARS * 3)},
-                         result="y" * (_TOOL_RESULT_CHARS * 3), ok=True, side_effect=True)
+                         result="y" * (TOOL_RESULT_CHARS * 3), ok=True, side_effect=True)
     pipe = _pipeline(stub_embedder, id_stage=FakeID(route="EGO"),
                      ego=FakeEgo(tool_calls=[huge]),
                      superego=FakeSuperego(approve=False))
@@ -826,8 +827,11 @@ async def test_a_tools_result_and_args_are_truncated_in_the_record(
                               dispatcher=dispatcher)
     rec = ctx.metadata["judge_attempts"][0]["tools"][0]
     # o corte carrega o MARCADOR: JSON cortado sem sinal se apresenta como inteiro-porém-
-    # quebrado, e o leitor não distingue truncamento de corrupção
-    assert rec["result"].endswith("…") and len(rec["result"]) == _TOOL_RESULT_CHARS + 1
+    # quebrado, e o leitor não distingue truncamento de corrupção. O do RESULTADO passou a ser
+    # o marcador do leitor, com o N real e DENTRO do teto — `test_o_corte_do_ledger_deixa_marca`
+    # é quem prova as propriedades; aqui fica só a ligação (o ledger usa-o de facto).
+    assert was_cut(rec["result"]) and cut_dropped(rec["result"]) > 0
+    assert len(rec["result"]) <= TOOL_RESULT_CHARS
     assert rec["args"].endswith("…") and len(rec["args"]) == _TOOL_ARGS_CHARS + 1
 
 

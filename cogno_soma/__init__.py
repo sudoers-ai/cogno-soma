@@ -15,6 +15,9 @@ from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
 from cogno_soma.pipeline import Pipeline, STOP_JUDGE_EXHAUSTED
 from cogno_soma.session import SessionRunner
+from cogno_soma.trace_cuts import (CUT_MARK, CUT_MARK_RE, TOOL_RESULT_CHARS,
+                                   ToolResultLimitFn, cut_dropped, cut_with_mark,
+                                   resolve_limit, was_cut)
 
 __all__ = [
     "Pipeline",
@@ -29,6 +32,20 @@ __all__ = [
     # would be a second definition of a contract that has already been wrong once.
     "STOP_JUDGE_EXHAUSTED",
     "SomaError",
+    # ── the cut that leaves a mark ───────────────────────────────────────────────────────
+    # Exported for the same reason as STOP_JUDGE_EXHAUSTED above: the HOST reads this ledger,
+    # re-cuts it at its own ceiling and counts the cuts, so the mark's spelling and the ceiling
+    # are a contract BETWEEN the two repos. A copy on the reader's side would be a second
+    # definition — and the first one has already been wrong once, at 200 against 240, with the
+    # reader's ceiling never biting and the writer's cut never saying it happened.
+    "CUT_MARK",
+    "CUT_MARK_RE",
+    "TOOL_RESULT_CHARS",
+    "ToolResultLimitFn",
+    "cut_with_mark",
+    "cut_dropped",
+    "was_cut",
+    "resolve_limit",
     # The turn the AGENT opens: perception stand-ins for a turn nobody spoke.
     "opening_perception",
     "opening_noumeno",
