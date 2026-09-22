@@ -137,7 +137,7 @@ class SessionRunner:
         self._carry: dict = dict(state.get("carry", {}))
         self._history: list[str] = list(state.get("history", []))
         # The rolling transcript: (user text, voiced reply, epoch-ts) — what makes a follow-up
-        # like "the 9am one" / "Vinicius Vale" legible. The timestamp lets the verbatim window
+        # like "the 9am one" / "Heitor Lacerda" legible. The timestamp lets the verbatim window
         # track the real wall-clock gap across persisted state. Older 2-tuple rows (pre-ts state)
         # load with ts=0.0 → treated as ancient → never verbatim (safe: they only leave the window).
         self._transcript: list[tuple[str, str, float]] = [
@@ -188,7 +188,7 @@ class SessionRunner:
         if transcript:
             blocks.append("[RECENT CONVERSATION]\n" + transcript)
             # The perception stages (NOUMENO/NER) read this to resolve a bare follow-up
-            # ("com o Vinicius Vale") against the assistant's last question instead of
+            # ("com o Heitor Lacerda") against the assistant's last question instead of
             # classifying it UNKNOWN and scope-blocking — same burst-scoped view.
             ctx.metadata[mk.CONVERSATION_HISTORY] = transcript
         if prior_summary:
