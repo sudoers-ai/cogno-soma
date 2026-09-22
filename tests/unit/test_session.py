@@ -153,14 +153,14 @@ async def test_transcript_feeds_conversation_history(stub_embedder, stub_backend
     pipe._id.process = spy  # type: ignore[method-assign]
     sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
     await sess.run("quero marcar com o cardiologista")
-    await sess.run("Vinicius Vale")
+    await sess.run("Heitor Lacerda")
     hist = seen["ego_context"]
     assert "[RECENT CONVERSATION]" in hist
     assert "User: quero marcar com o cardiologista" in hist
     assert "Assistant: final reply" in hist            # the voiced reply, not just the user text
     # and the transcript is in the serializable state (survives a worker handoff), now with a ts
     row = sess.state["transcript"][-1]
-    assert row[:2] == ["Vinicius Vale", "final reply"] and isinstance(row[2], float)
+    assert row[:2] == ["Heitor Lacerda", "final reply"] and isinstance(row[2], float)
 
 
 async def test_stale_exchange_drops_out_of_verbatim_window(stub_embedder, stub_backend):
@@ -201,7 +201,7 @@ async def test_layers_are_ordered_by_authority(stub_embedder, stub_backend):
     sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
     await sess.run("oi", memories=["prefers PIX"],
                    prior_summary="Earlier: discussed a July booking.",
-                   graph_context="Dr. Vale — cardiologist")
+                   graph_context="Dr. Lacerda — cardiologist")
     ctx_seen = seen["ego_context"]
     order = [ctx_seen.index(lbl) for lbl in
              ("[SOURCES]", "[EARLIER CONTEXT]", "[MEMORIES]", "[KNOWLEDGE GRAPH]")]
