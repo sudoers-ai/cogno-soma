@@ -366,12 +366,12 @@ async def test_sources_instruction_keeps_memories_assertable(stub_embedder, stub
 
     sess = SessionRunner(pipe, _cfg(stub_backend), dispatcher=RecordingDispatcher())
     await sess.run("quem te passou meu contato?",
-                   memories=["Nota do operador: veio através do José Manzoli."])
+                   memories=["Nota do operador: veio através do Otávio Bertholdi."])
     src = captured[0]
     assert "VOLATILE" in src                      # staleness rule survives, scoped
     assert "DURABLE" in src and "MAY state" in src
     assert "outrank" in src                       # beats the model's own earlier denial
-    assert "[MEMORIES]" in src and "José Manzoli" in src
+    assert "[MEMORIES]" in src and "Otávio Bertholdi" in src
 
 
 async def test_with_no_verbatim_window_the_recap_is_the_THREAD_not_background(
