@@ -110,6 +110,12 @@ Fire order: `before_turn` → NOUMENO → `after_noumeno` → NER → `after_ner
 `after_id` → gates → EGO⇄SUPEREGO (`on_rollback` per retry, `on_commit` on
 approval) → `after_ego` → voice → `after_superego` → `after_turn`.
 
+A **proposal** turn (the EGO held a call for the contact's "yes") skips the judge, because
+the action is incomplete on purpose. The exception is a held call that sends text to a
+person, which the host declares in `mk.HELD_DELIVERED_TEXT`: that text is final at the hold,
+so the turn is judged and rewritten like any other before it can be proposed. See
+`docs/HOST_INTEGRATION.md` §4.2.
+
 ## The turn the agent opens
 
 A proactive turn has no utterance. What you hold is your OWN directive ("open the conversation
