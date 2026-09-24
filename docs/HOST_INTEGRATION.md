@@ -160,6 +160,25 @@ still reports the tokens it spent up to that point.
 lets you swap any stage for a custom implementation (a cheaper NER, a cached
 NOUMENO, a test double) as long as it matches the cogno-anima stage signature.
 
+The parameters are typed **structurally**, so a double that matches the shape is
+accepted by the type checker too — no subclassing, no `cast`:
+
+| parameter  | protocol                                    | what the Pipeline calls |
+|------------|---------------------------------------------|-------------------------|
+| `noumeno`  | `cogno_anima.BaseStage`                     | `process(ctx, llm)` |
+| `ner`      | `cogno_anima.BaseStage`                     | `process(ctx, llm)` |
+| `id_stage` | `cogno_soma.IDStageProtocol`                | `process(ctx, embedder)` |
+| `ego`      | `cogno_soma.EgoStageProtocol`               | `process(ctx, backend, dispatcher, *, system_prompt)` |
+| `superego` | `cogno_soma.SuperegoStageProtocol`          | `check_input_scope`, `evaluate`, `voice`, `_blocked_response(ctx, *, block_message=None)` |
+
+Every one also carries `name: str`, because `BaseStage` does (every anima stage
+has one; the Pipeline never reads it). `_blocked_response` is private-named in
+cogno-anima but the Pipeline calls it on a PII-CRITICAL turn, so it is part of the
+contract — a SUPEREGO double without it fails on exactly the path it least often
+runs. `BaseStage` is reused from cogno-anima, not copied here. All four protocols are
+`runtime_checkable`: `isinstance(double, IDStageProtocol)` in a test says the
+members EXIST; the signatures are the type checker's to hold.
+
 ## 7. What stays yours
 
 Persona selection, model-ladder/escalation, RBAC, metering/billing, the real
