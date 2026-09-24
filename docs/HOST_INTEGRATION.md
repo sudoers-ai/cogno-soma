@@ -98,6 +98,40 @@ your policy, the same shape as `escalate`. Leave it unset and every result is cu
 cutting under its reader's ceiling is how one half of the trace ends up shorter than the other
 and the difference reads as a fact about the turn.
 
+### 4.2 A held proposal, and when the judge reads it
+
+When the EGO's gate B holds a call for the contact's "yes" (`ctx.ego_result.pending_confirmation`
+is non-empty), the turn is a **proposal**: the action is incomplete on purpose. By default the
+loop does **not** judge it, because a judge would reject the hold itself and spend a retry on
+every confirmation turn. The loop records a stand-in approval instead and goes to the voice:
+`judge_verdict` reads `{"approved": true, "attempts": 1}`, no `judge_attempts` entry is written,
+and `on_commit` fires although nothing was committed.
+
+**The exception is a held call that SENDS TEXT TO A PERSON** (a message, a note to staff). That
+text is final at the hold: the confirmed replay sends those exact bytes. Skipping the judge there
+meant the message's only review ran after it was delivered, where a correct critique un-sends
+nothing (measured on a downstream host: 3 of 4 delivered messages were wrong).
+
+So declare, per turn, which tools deliver which argument's text, in
+`ctx.metadata[mk.HELD_DELIVERED_TEXT]` as `{tool_name: argument_name}`. Read it from each tool's
+own manifest; the core never guesses it from a name. When
+`cogno_anima.types.held_delivered_texts(ctx)` returns anything, the proposal turn is judged like
+any other turn, and the judge reads the held text itself (cogno-anima's
+`# Messages HELD for the user's confirmation` block):
+
+- **approved**: the loop ends approved, and you propose the call as usual;
+- **rejected**: the critique goes back to the EGO (`ego_correction`), which rewrites the message
+  within the same correction budget;
+- **still rejected when the budget is spent**: the loop ends unapproved. `judge_verdict` is
+  already set when `after_ego` fires, so a proposal gate there must not arm a confirmation over
+  `approved: false`. Without such a gate, soma's own exhaustion path takes the turn
+  (`stop_reason = "judge_exhausted"`, nothing is proposed).
+
+Every other hold keeps the skip, byte for byte: no declaration, a declaration that is not a
+mapping, or held calls whose tools the declaration does not name. A declared call whose text
+argument is missing or empty is still judged: an empty message is still a message about to be
+proposed. Requires a cogno-anima with `held_delivered_texts` (sudoers-ai/cogno-anima#183).
+
 ## 5. Token accounting (for billing / control)
 
 Every LLM call a turn makes lands on `ctx` — soma drops nothing:
