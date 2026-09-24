@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from cogno_anima import metakeys as mk
-from cogno_anima.types import committed_this_turn, wrote_for_the_contact
+from cogno_anima.types import committed_this_turn, held_delivered_texts, wrote_for_the_contact
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
@@ -813,7 +813,15 @@ class Pipeline:
             # tinha um buraco exatamente onde havia escrita.
             if ctx.ego_result:
                 ctx.turn_executions.extend(ctx.ego_result.tools_executed)
-            if ctx.ego_result and ctx.ego_result.pending_confirmation:
+            # …EXCEPT when a held call SENDS TEXT TO A PERSON (declared by the host,
+            # `mk.HELD_DELIVERED_TEXT`). That text is final at the hold — the confirmed replay
+            # sends those exact bytes — so skipping the judge here meant its only review ran
+            # AFTER delivery, where a correct critique un-sends nothing (measured downstream: 3
+            # of 4 messages delivered to staff were wrong). Such a proposal turn is judged like
+            # any other: approved → the host proposes it; rejected → the EGO rewrites it within
+            # the same budget; still rejected → the loop ends unapproved and nothing is proposed.
+            if (ctx.ego_result and ctx.ego_result.pending_confirmation
+                    and not held_delivered_texts(ctx)):
                 judge = SuperegoResult(approved=True, metrics=_zero_metrics())
                 break
             judge = await self._judge(ctx, cfg, attempt=attempt)
