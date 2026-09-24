@@ -28,6 +28,7 @@ from typing import Optional
 
 from cogno_anima import metakeys as mk
 from cogno_anima.types import committed_this_turn, held_delivered_texts, wrote_for_the_contact
+from cogno_anima.stages.base import BaseStage
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
@@ -41,6 +42,7 @@ from cogno_synapse import Embedder
 from cogno_soma.config import TurnConfig
 from cogno_soma.errors import StopPipeline
 from cogno_soma.hooks import Hooks, HookFn
+from cogno_soma.stages import EgoStageProtocol, IDStageProtocol, SuperegoStageProtocol
 from cogno_soma.trace_cuts import ToolResultLimitFn, cut_with_mark, resolve_limit
 # Judge critiques are model prose; the whole point is to make a red check explainable, and a
 # couple of sentences does that. Unbounded, they ride into whatever the host persists.
@@ -543,20 +545,23 @@ class Pipeline:
         embedder: Embedder,
         prompts_dir: Optional[Path] = None,
         slangs=None,
-        noumeno: Optional[Noumeno] = None,
-        ner: Optional[IntentAnalyzer] = None,
-        id_stage: Optional[IDStage] = None,
-        ego: Optional[EgoStage] = None,
-        superego: Optional[SuperegoStage] = None,
+        noumeno: Optional[BaseStage] = None,
+        ner: Optional[BaseStage] = None,
+        id_stage: Optional[IDStageProtocol] = None,
+        ego: Optional[EgoStageProtocol] = None,
+        superego: Optional[SuperegoStageProtocol] = None,
     ) -> None:
         # Stages default to the cogno-anima implementations; a host (or a test) may
-        # inject its own — e.g. a cheaper NER, or a fake stage with no LLM.
+        # inject its own — e.g. a cheaper NER, or a fake stage with no LLM. The params are
+        # typed STRUCTURALLY (`cogno_soma.stages`), and the attributes below carry the same
+        # protocols, so the type checker holds the anima defaults to the contract too.
         self._embedder = embedder
-        self._noumeno = noumeno or Noumeno(embedder=embedder, prompts_dir=prompts_dir, slangs=slangs or {})
-        self._ner = ner or IntentAnalyzer(prompts_dir=prompts_dir)
-        self._id = id_stage or IDStage()
-        self._ego = ego or EgoStage()
-        self._superego = superego or SuperegoStage()
+        self._noumeno: BaseStage = noumeno or Noumeno(
+            embedder=embedder, prompts_dir=prompts_dir, slangs=slangs or {})
+        self._ner: BaseStage = ner or IntentAnalyzer(prompts_dir=prompts_dir)
+        self._id: IDStageProtocol = id_stage or IDStage()
+        self._ego: EgoStageProtocol = ego or EgoStage()
+        self._superego: SuperegoStageProtocol = superego or SuperegoStage()
 
     async def run_turn(
         self,

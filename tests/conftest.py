@@ -6,7 +6,8 @@ path — a given route, a PII block, a scope block, a judge rejection → handof
 assert the wiring (gates, the correction loop, hooks, session threading). The real
 stages are exercised by the Ollama-gated integration test instead.
 
-The fakes match the cogno-anima stage method signatures the Pipeline calls.
+The fakes match the cogno-anima stage method signatures the Pipeline calls — the structural
+contract of ``cogno_soma.stages`` (``tests/unit/test_stage_protocols.py`` holds them to it).
 """
 
 from __future__ import annotations
@@ -64,6 +65,8 @@ class RecordingDispatcher:
 
 # ── fake stages ─────────────────────────────────────────────────────────
 class FakeNoumeno:
+    name = "noumeno"
+
     def __init__(self, rewritten: str = "hello", calls: Optional[list] = None) -> None:
         self._rewritten = rewritten
         self._calls = calls
@@ -80,6 +83,8 @@ class FakeNoumeno:
 
 
 class FakeNER:
+    name = "ner"
+
     def __init__(self, *, intent_class="INFORMATION_REQUEST", triad_signal="BALANCED",
                  goal="help the user", domains=None, pii=None,
                  calls: Optional[list] = None) -> None:
@@ -99,6 +104,8 @@ class FakeNER:
 
 
 class FakeID:
+    name = "id"
+
     def __init__(self, *, route="EGO", blocked=False, goal_status="ONGOING",
                  calls: Optional[list] = None) -> None:
         self._route, self._blocked, self._goal_status = route, blocked, goal_status
@@ -131,6 +138,8 @@ def _per_attempt(seq: Optional[list], invocation: int) -> list:
 
 
 class FakeEgo:
+    name = "ego"
+
     def __init__(self, *, calls: Optional[list] = None,
                  tool_calls: Optional[list] = None,
                  tools_offered: Optional[list] = None,
@@ -179,6 +188,8 @@ class FakeEgo:
 
 class FakeSuperego:
     """Programmable judge + voicer + scope guard + block."""
+
+    name = "superego"
 
     def __init__(self, *, approve=True, critique="fix it", voice="final reply",
                  scope_blocked=False, refusal="out of scope", block_response="blocked",

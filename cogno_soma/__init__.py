@@ -15,6 +15,7 @@ from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
 from cogno_soma.pipeline import Pipeline, STOP_JUDGE_EXHAUSTED
 from cogno_soma.session import SessionRunner
+from cogno_soma.stages import EgoStageProtocol, IDStageProtocol, SuperegoStageProtocol
 from cogno_soma.trace_cuts import (CUT_MARK, CUT_MARK_RE, TOOL_RESULT_CHARS,
                                    ToolResultLimitFn, cut_dropped, cut_with_mark,
                                    resolve_limit, was_cut)
@@ -32,6 +33,13 @@ __all__ = [
     # would be a second definition of a contract that has already been wrong once.
     "STOP_JUDGE_EXHAUSTED",
     "SomaError",
+    # ── the stage contract ───────────────────────────────────────────────────────────────
+    # What `Pipeline(id_stage=…, ego=…, superego=…)` accepts, structurally. Exported so a host
+    # can hold its own doubles to it; NOUMENO and NER take `cogno_anima.BaseStage`, which the
+    # anima owns and this package does not re-export (one definition, one import path).
+    "IDStageProtocol",
+    "EgoStageProtocol",
+    "SuperegoStageProtocol",
     # ── the cut that leaves a mark ───────────────────────────────────────────────────────
     # Exported for the same reason as STOP_JUDGE_EXHAUSTED above: the HOST reads this ledger,
     # re-cuts it at its own ceiling and counts the cuts, so the mark's spelling and the ceiling
