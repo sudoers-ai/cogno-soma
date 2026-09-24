@@ -75,7 +75,17 @@ After a turn, inspect `ctx`:
 ### 4.1 The per-attempt ledger, and the cut that leaves a mark
 
 `ctx.metadata["judge_attempts"]` carries one entry per EGO⇄SUPEREGO attempt: the verdict, the
-critique, the draft that was judged, and the calls that attempt executed. Tool results there are
+critique, the draft that was judged, and the calls that attempt executed.
+
+Each entry also carries `branch` — which criteria block THAT attempt's judge was given
+(`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
+judge returned, never re-derived. It is per attempt because the branch can differ between
+attempts: the classifier run over the context as the turn ENDS reads `execution` on a turn whose
+attempt 1 only read (and was rejected) and whose attempt 2 wrote, so a question about attempt 1 —
+"could the synchronous judge have been skipped on this clean read?" — is answered by
+`judge_attempts[0]["branch"]` and by nothing computed afterwards. Closed alphabet: a label outside
+the three is dropped. The key is ABSENT when the judge named no branch (a stand-in stage that does
+not classify), which is "not on record", not `execution`. Tool results there are
 **cut**, because the entry rides in metadata a host persists and a tool result is unbounded prose.
 
 A cut ends in `…[cortado, faltam N chars]`, where **N is what is MISSING** — not what was kept,
