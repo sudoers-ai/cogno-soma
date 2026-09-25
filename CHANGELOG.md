@@ -4,6 +4,23 @@
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
 
+### Added
+
+- **Each judge-ledger entry records which criteria its judge was given (`branch`).**
+  `ctx.metadata["judge_attempts"][i]["branch"]` is the `SuperegoResult.judge_branch` that
+  attempt's `evaluate` returned (`execution` | `conversational` | `readonly`) — the anima's own
+  `_judge_branch`, reused, never re-derived here. The loop kept the verdict and dropped the label,
+  so a host could only re-run the classifier over the context as the turn ENDED, and that is a
+  different fact: its write half only accumulates, so a turn whose attempt 1 only READ (rejected)
+  and whose attempt 2 WROTE reads `execution` at the end although attempt 1 was judged as a clean
+  read. That is exactly the attempt a "could the synchronous judge have been skipped?" shadow
+  measures. Closed alphabet (anything else is dropped); absent when the judge named no branch.
+  No behaviour changes — the judge runs exactly as before.
+  `tests/unit/test_the_ledger_records_the_judges_branch.py` runs the REAL anima judge over a stub
+  backend: clean read → `readonly`, write → `execution`, a read with one failed call →
+  `execution`, the per-attempt twin with the end-of-turn classifier as its pair, and the two
+  absence controls. See `docs/HOST_INTEGRATION.md` §4.1.
+
 ### Changed
 
 - **The stage parameters of `Pipeline` are typed structurally.** `noumeno`/`ner` take

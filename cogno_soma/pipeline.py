@@ -33,7 +33,8 @@ from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
 from cogno_anima.stages.noumeno import Noumeno
-from cogno_anima.stages.superego import SuperegoStage
+from cogno_anima.stages.superego import (JUDGE_CONVERSATIONAL_BRANCH, JUDGE_EXECUTION,
+                                         JUDGE_READONLY, SuperegoStage)
 from cogno_anima.tools import ToolDispatcher, ToolPolicyDispatcher
 from cogno_anima.types import (IntentResult, NoumenoResult, PipelineContext,
                                StageMetrics, SuperegoResult)
@@ -495,6 +496,39 @@ def _attempt_draft(ego_result) -> dict:
     return {"draft": draft[:_DRAFT_CHARS], "draft_len": len(draft)}
 
 
+# The alphabet `SuperegoStage._judge_branch` answers in, taken from the module that produces it.
+_JUDGE_BRANCHES = frozenset({JUDGE_EXECUTION, JUDGE_CONVERSATIONAL_BRANCH, JUDGE_READONLY})
+
+
+def _attempt_branch(judge) -> dict:
+    """Which CRITERIA this attempt's judge was given: the label the judge RETURNED, re-derived
+    by nobody.
+
+    ``SuperegoStage.evaluate`` picks the criteria block per call (``execution`` |
+    ``conversational`` | ``readonly``, from ``_judge_branch``) and hands the label back on
+    ``SuperegoResult.judge_branch``. This loop kept the result and dropped the label, so the only
+    branch a host could persist was the classifier run AGAIN over the context as the turn ENDED.
+    That is not the same fact. The clean-loop half of ``_is_readonly_turn`` reads the SURVIVING
+    attempt, so the branch can walk back between attempts: an attempt 1 that was cut (execution)
+    followed by a clean attempt 2 reads ``readonly`` at the end. And the write half only
+    accumulates, so an attempt 1 that only READ, rejected, followed by an attempt 2 that WROTE
+    reads ``execution`` at the end — although attempt 1 was judged as a clean read.
+
+    The second shape is the one that matters for a decision about attempt 1 itself: "could the
+    synchronous judge have been skipped on this clean read?" is asked BEFORE the first verdict,
+    so it is answered by attempt 1's branch and by nothing else. Read from the verdict, per
+    attempt, it needs no second copy of the precedence.
+
+    Closed alphabet. The ledger rides in metadata a host persists, so a label from outside the
+    three (a stand-in stage returning its own text) is dropped, never written. The key is ABSENT
+    when the judge said nothing — a stand-in that does not classify, or the no-execution path of
+    ``evaluate``, which returns before choosing — because an absent key ("not on record") and an
+    ``execution`` label are different answers, and a default would merge them.
+    """
+    branch = getattr(judge, "judge_branch", "")
+    return {"branch": branch} if isinstance(branch, str) and branch in _JUDGE_BRANCHES else {}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -862,6 +896,7 @@ class Pipeline:
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
                 **_attempt_draft(ctx.ego_result),
                 **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
+                **_attempt_branch(judge),
             })
             if judge.approved:
                 break
