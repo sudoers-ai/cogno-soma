@@ -75,7 +75,25 @@ After a turn, inspect `ctx`:
 ### 4.1 The per-attempt ledger, and the cut that leaves a mark
 
 `ctx.metadata["judge_attempts"]` carries one entry per EGO⇄SUPEREGO attempt: the verdict, the
-critique, the draft that was judged, and the calls that attempt executed.
+critique, the draft that was judged, what the attempt was offered, and the calls it executed.
+The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction loop):
+
+| key | what it is | written by |
+|---|---|---|
+| `attempt`, `approved` | the attempt number and the judge's verdict | the loop |
+| `critique` | the judge's critique, cut at `_CRITIQUE_CHARS` | the loop |
+| `draft`, `draft_len` | the text THIS attempt's judge read, cut at `_DRAFT_CHARS`, and its full length — both on every attempt, `""`/`0` when the executor wrote nothing | `_attempt_draft` |
+| `committed` | this attempt ran a write that succeeded (`ok ∧ side_effect`), over its FULL list — the turn's own answer is `wrote_for_the_contact`, in the anima | `_attempt_tools` |
+| `tools_offered` | the tools this attempt was OFFERED, after every mask — an empty `tools` then tells "declined" from "never on the table" | `_attempt_tools` |
+| `tools` | the calls: `tool`, `args` (cut at `_TOOL_ARGS_CHARS`), `ok`, `side_effect`, `result` (cut with a mark, below) | `_attempt_tools` |
+| `tools_dropped`, `tools_offered_dropped` | how many past `_TOOLS_PER_ATTEMPT` were left out — present only when some were | `_attempt_tools` |
+| `tools_error` | the display list could not be built (the exception's TYPE); `committed` and `tools_offered` survive it | `_attempt_tools` |
+| `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
+
+The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surface_it_was_OFFERED`,
+`test_each_attempt_records_the_draft_the_judge_ACTUALLY_read`,
+`test_the_offered_cap_is_reported_on_BOTH_paths`) and
+`test_the_ledger_records_the_judges_branch.py`.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
@@ -85,7 +103,8 @@ attempt 1 only read (and was rejected) and whose attempt 2 wrote, so a question 
 "could the synchronous judge have been skipped on this clean read?" — is answered by
 `judge_attempts[0]["branch"]` and by nothing computed afterwards. Closed alphabet: a label outside
 the three is dropped. The key is ABSENT when the judge named no branch (a stand-in stage that does
-not classify), which is "not on record", not `execution`. Tool results there are
+not classify, or the anima's `evaluate` path that returns before choosing because nothing
+executed), which is "not on record", not `execution`. Tool results there are
 **cut**, because the entry rides in metadata a host persists and a tool result is unbounded prose.
 
 A cut ends in `…[cortado, faltam N chars]`, where **N is what is MISSING** — not what was kept,

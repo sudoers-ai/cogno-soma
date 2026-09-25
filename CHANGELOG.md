@@ -4,6 +4,16 @@
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
 
+### Changed (docs)
+
+- **`docs/HOST_INTEGRATION.md` §4.1 lists every key of a judge-ledger entry** (Phase 2 docs
+  sweep B). The prose named four of them — verdict, critique, draft, calls — while an entry also
+  carries `draft_len`, `committed`, `tools_offered`, the two `*_dropped` counts, `tools_error` and
+  (#52) `branch`. The section is now a table: each key, what it is, and the function in
+  `cogno_soma/pipeline.py` that writes it, with the tests that pin them. The absence of `branch`
+  is also stated in full: a stand-in judge that does not classify, OR the anima's `evaluate`
+  returning before it chooses because nothing executed. Docs only.
+
 ### Added
 
 - **Each judge-ledger entry records which criteria its judge was given (`branch`).**
