@@ -35,8 +35,14 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
     the wide shape matches 20 turns; with the negative, 4, none of them this defect; with the set
     of one tool the host starts with, 0. On the rehearsal tenant it matches 4 of 4.
   - Off without the declaration, so a host reverts the feature by not stamping the key.
+  - The two exceptions SHARE the ceiling: with both predicates forced true, a turn still gets
+    one extra pass.
+  - **Countable:** the rejected ledger entry that bought the pass carries `extra_pass`
+    (`action_owed` | `read_owed`, exported as `cogno_soma.EXTRA_PASSES`), absent otherwise. Until
+    now a grant, the action one included, left only a DEBUG log line.
   - `tests/unit/test_one_turn_to_read.py` covers:
     - the twin (red at the base, measured) and its pair with the source read on pass 1;
+    - the switch as ONE twin (declared → one extra pass; absent → none) and the shared ceiling;
     - controls (a) to (f);
     - condition 3, the committed guard, the ceiling and a budget of two;
     - the absence list with its own twin;

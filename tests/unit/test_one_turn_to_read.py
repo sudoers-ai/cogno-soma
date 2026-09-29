@@ -39,7 +39,12 @@ MUTATIONS (each named in the PR with what died):
   * drop condition 3 (`_asserts_absence` always True) -> the no-negative control dies;
   * drop `committed_this_turn`             -> the committed control dies;
   * drop the sentence from the reason      -> the twin dies;
-  * give the sentence to every rejected retry -> the budget-of-two control dies.
+  * give the sentence to every rejected retry -> the budget-of-two control dies;
+  * a DEFAULT declaration when the key is absent -> the switch twin and (f) absent die;
+  * give the read exception a ceiling of its own -> the shared-ceiling test dies;
+  * ask the read exception FIRST               -> the shared-ceiling test dies (the ledger
+                                                  field is what makes the order observable);
+  * drop either `extra_pass` stamp             -> the twin / (e) and the shared-ceiling test die.
 """
 
 import pytest
@@ -48,7 +53,9 @@ from cogno_anima import metakeys as mk
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.types import PipelineContext, ToolExecution, ToolResult
 
-from cogno_soma import Pipeline, STOP_JUDGE_EXHAUSTED, TurnConfig
+from cogno_soma import (EXTRA_PASS_ACTION, EXTRA_PASS_READ, EXTRA_PASSES, Pipeline,
+                        STOP_JUDGE_EXHAUSTED, TurnConfig)
+from cogno_soma import pipeline as soma_pipeline
 from cogno_soma.pipeline import _READ_OWED_NOTE, _asserts_absence
 
 from tests.conftest import FakeEgo, FakeID, FakeNER, FakeNoumeno, FakeSuperego
@@ -117,6 +124,10 @@ async def test_a_negative_over_an_UNREAD_source_buys_one_more_pass(stub_embedder
     reason = ctx.metadata[mk.EGO_CORRECTION]["reason"]
     assert reason == f"{CRITIQUE}\n\n{_note(DOCS)}"
     assert "`consult_documents`" in reason and "not called" in reason
+    # …and it is COUNTABLE: the rejected entry that bought the pass says which exception did.
+    ledger = ctx.metadata[mk.JUDGE_ATTEMPTS]
+    assert ledger[0]["extra_pass"] == EXTRA_PASS_READ
+    assert "extra_pass" not in ledger[1], "the approved attempt bought nothing"
 
 
 async def test_the_same_turn_with_the_source_READ_is_one_pass(stub_embedder, stub_backend,
@@ -140,6 +151,7 @@ async def test_a_the_read_was_MADE_and_found_nothing(stub_embedder, stub_backend
     assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
     assert ctx.needs_handoff is False
     assert ctx.superego_result.response == "final reply"
+    assert "extra_pass" not in ctx.metadata[mk.JUDGE_ATTEMPTS][0]
 
 
 @pytest.mark.parametrize("offered", [
@@ -201,6 +213,7 @@ async def test_e_on_an_ACTION_the_action_exception_keeps_its_precedence(stub_emb
                      dispatcher=_PolicyDispatcher())
     assert ego.invocations == 2                               # `_owes_an_action` fired
     assert ctx.metadata[mk.EGO_CORRECTION]["reason"] == CRITIQUE
+    assert ctx.metadata[mk.JUDGE_ATTEMPTS][0]["extra_pass"] == EXTRA_PASS_ACTION
 
 
 async def test_e_an_ACTION_without_a_write_gets_nothing_from_the_read_sibling(
@@ -360,3 +373,45 @@ async def test_the_REAL_executor_is_handed_the_sentence_and_reads(stub_embedder)
     second_pass = next(p for p in backend.prompts if "# Correction requested" in p)
     assert _note(DOCS) in second_pass
     assert CRITIQUE in second_pass
+
+
+# ── the three landing conditions, each with its twin ────────────────────────────────────────
+async def test_the_switch_is_the_DECLARATION(stub_embedder, stub_backend, dispatcher):
+    """ONE turn, both worlds: declared → one extra pass; not declared → none at all.
+
+    This is the host's reversal (`COGNO_READ_OWED_RETRY=0` stops the stamp), so it is pinned as
+    a pair rather than inferred from the controls: a mutant that falls back to a DEFAULT
+    declaration when the key is absent passes every control that declares something."""
+    ego = FakeEgo(tool_calls=[[EMPTY_SUMMARY]], tools_offered=[OFFERED], drafts=[NEGATIVE])
+    on = await _run(stub_embedder, stub_backend, ego, metadata=DECLARED, dispatcher=dispatcher)
+    assert ego.invocations == 2
+    assert on.metadata[mk.JUDGE_ATTEMPTS][0]["extra_pass"] == EXTRA_PASS_READ
+
+    ego = FakeEgo(tool_calls=[[EMPTY_SUMMARY]], tools_offered=[OFFERED], drafts=[NEGATIVE])
+    off = await _run(stub_embedder, stub_backend, ego, metadata={}, dispatcher=dispatcher)
+    assert ego.invocations == 1
+    assert mk.SOURCE_READS not in off.metadata
+    assert all("extra_pass" not in e for e in off.metadata[mk.JUDGE_ATTEMPTS])
+
+
+async def test_the_two_exceptions_SHARE_one_ceiling(stub_embedder, stub_backend, dispatcher,
+                                                    monkeypatch):
+    """Both predicates TRUE on every rejection, and the turn still gets ONE extra pass.
+
+    The two cannot be true together through a real turn: their intent classes are disjoint.
+    So both are forced, which is the only way to ask the question the ceiling answers: a turn
+    never collects the action pass AND the read pass. The pass that is granted is the action
+    one, because it is asked first; the second rejection meets the ceiling and buys nothing."""
+    monkeypatch.setattr(soma_pipeline, "_owes_an_action", lambda ctx, dispatcher: True)
+    monkeypatch.setattr(soma_pipeline, "_owes_a_read", lambda ctx: [DOCS])
+    ego = FakeEgo(tool_calls=[[EMPTY_SUMMARY]], tools_offered=[OFFERED], drafts=[NEGATIVE])
+    ctx = await _run(stub_embedder, stub_backend, ego, dispatcher=dispatcher)
+    assert ego.invocations == 2
+    ledger = ctx.metadata[mk.JUDGE_ATTEMPTS]
+    assert [e.get("extra_pass") for e in ledger] == [EXTRA_PASS_ACTION, None]
+    assert ctx.stop_reason == STOP_JUDGE_EXHAUSTED
+
+
+def test_the_extra_pass_alphabet_is_CLOSED_and_exported():
+    """The host persists this ledger and closes the field from these constants."""
+    assert EXTRA_PASSES == {EXTRA_PASS_ACTION, EXTRA_PASS_READ} == {"action_owed", "read_owed"}

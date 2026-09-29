@@ -377,6 +377,16 @@ _ABSENCE = re.compile(
 _READ_OWED_NOTE = ("Before stating that it does not exist, call {tools} — {verb} offered this "
                    "turn and not called.")
 
+# WHICH exception granted the extra pass, written on the ledger entry of the REJECTED attempt
+# whose rejection bought it (`judge_attempts[i]["extra_pass"]`). Closed alphabet, exported, so
+# a host persisting the ledger closes it from these constants instead of spelling them again.
+# ABSENT means no extra pass was granted on that rejection: the budget allowed a retry, or the
+# loop ended there. Before this key the grant was a DEBUG log line, which a deployment may drop,
+# so "the exception fired" could not be counted from anything persisted.
+EXTRA_PASS_ACTION = "action_owed"
+EXTRA_PASS_READ = "read_owed"
+EXTRA_PASSES = frozenset({EXTRA_PASS_ACTION, EXTRA_PASS_READ})
+
 
 def _asserts_absence(text: Optional[str]) -> bool:
     """Does the draft claim that something is NOT there? The closed list above, nothing else."""
@@ -997,14 +1007,15 @@ class Pipeline:
             # attempt's judge was handed a moment ago — because the two are one fact, and
             # recording half of it is what made every reading of the other half unreliable
             # (see `_attempt_draft`).
-            ledger.append({
+            entry = {
                 "attempt": attempt,
                 "approved": bool(judge.approved),
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
                 **_attempt_draft(ctx.ego_result),
                 **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
                 **_attempt_branch(judge),
-            })
+            }
+            ledger.append(entry)
             if judge.approved:
                 break
             owed_read: "list[str]" = []
@@ -1016,6 +1027,7 @@ class Pipeline:
                 if attempt >= _ACTION_RETRY_CEILING:
                     break
                 if _owes_an_action(ctx, dispatcher):
+                    entry["extra_pass"] = EXTRA_PASS_ACTION
                     logger.debug("action_retry_granted attempt=%s", attempt)
                 else:
                     # The sibling, asked SECOND so the action exception keeps its precedence:
@@ -1023,6 +1035,7 @@ class Pipeline:
                     owed_read = _owes_a_read(ctx)
                     if not owed_read:
                         break
+                    entry["extra_pass"] = EXTRA_PASS_READ
                     logger.debug("read_retry_granted attempt=%s tools=%s", attempt,
                                  ",".join(owed_read))
             # rejected → this EGO attempt becomes retry history; feed the critique back

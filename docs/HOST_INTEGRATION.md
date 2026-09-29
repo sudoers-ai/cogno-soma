@@ -89,11 +89,12 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `tools_dropped`, `tools_offered_dropped` | how many past `_TOOLS_PER_ATTEMPT` were left out — present only when some were | `_attempt_tools` |
 | `tools_error` | the display list could not be built (the exception's TYPE); `committed` and `tools_offered` survive it | `_attempt_tools` |
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
+| `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed` or `read_owed` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
 
 The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surface_it_was_OFFERED`,
 `test_each_attempt_records_the_draft_the_judge_ACTUALLY_read`,
-`test_the_offered_cap_is_reported_on_BOTH_paths`) and
-`test_the_ledger_records_the_judges_branch.py`.
+`test_the_offered_cap_is_reported_on_BOTH_paths`),
+`test_the_ledger_records_the_judges_branch.py` and, for `extra_pass`, `test_one_turn_to_read.py`.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
@@ -190,7 +191,13 @@ The read exception stays off in each of these cases:
   the critique alone.
 
 The two exceptions never overlap: they are scoped to disjoint intent classes, and
-`_owes_an_action` is asked first. What was offered and what was called are read by
+`_owes_an_action` is asked first. They also SHARE the ceiling, so even with both true a turn gets
+one extra pass, not two (pinned with both predicates forced true).
+
+**Counting it.** The rejected ledger entry that bought the pass carries
+`judge_attempts[i]["extra_pass"]` = `action_owed` | `read_owed`, a closed alphabet exported as
+`cogno_soma.EXTRA_PASSES`. The key is absent when no extra pass was granted on that rejection.
+Before it, a grant left only a DEBUG log line. What was offered and what was called are read by
 `cogno_anima.types.source_reads_not_called` over the anima's shared execution walk (the
 intra-turn consult included). Requires a cogno-anima with that predicate
 (sudoers-ai/cogno-anima#196).
