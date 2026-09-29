@@ -90,11 +90,13 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `tools_error` | the display list could not be built (the exception's TYPE); `committed` and `tools_offered` survive it | `_attempt_tools` |
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
 | `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed` or `read_owed` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
+| `skipped` | the judge did NOT read this attempt, and why: `prejudged_replay` (`cogno_soma.JUDGE_SKIPS`) — the «sim» that replayed a held message the judge had already approved (§4.2); absent when the judge read it | the loop |
 
 The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surface_it_was_OFFERED`,
 `test_each_attempt_records_the_draft_the_judge_ACTUALLY_read`,
 `test_the_offered_cap_is_reported_on_BOTH_paths`),
-`test_the_ledger_records_the_judges_branch.py` and, for `extra_pass`, `test_one_turn_to_read.py`.
+`test_the_ledger_records_the_judges_branch.py`, for `extra_pass`, `test_one_turn_to_read.py`, and,
+for `skipped`, `test_a_prejudged_replay_is_not_judged_again.py`.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
@@ -161,6 +163,26 @@ Every other hold keeps the skip, byte for byte: no declaration, a declaration th
 mapping, or held calls whose tools the declaration does not name. A declared call whose text
 argument is missing or empty is still judged: an empty message is still a message about to be
 proposed. Requires a cogno-anima with `held_delivered_texts` (sudoers-ai/cogno-anima#183).
+
+**The «sim» that sends it is not judged again — when you STAMP the approval.** The proposal turn's
+judge read the message and approved it; your gate proposes only then; and on the «sim» the confirmed
+replay sends those bytes. A post-send judge re-reading them has no new evidence — measured
+downstream: it rejected a delivered message for want of a read "this turn" that had been made on the
+proposal turn, and the turn ended in a handoff over a message that went out right. So attempt 1 of a
+confirmed turn skips the judge when ALL four hold:
+
+- (a) what it executed is exactly the multiset of `mk.EGO_CONFIRMED_CALLS` (tool + canonical
+  arguments; a blocked re-issue of one of them executed nothing);
+- (b) every one of those tools is in this turn's `mk.HELD_DELIVERED_TEXT`;
+- (c) every one came back `ok` and `side_effect`;
+- (d) every confirmed row carries your stamp, `row[cogno_soma.PREJUDGED_TEXT_SHA]` =
+  `cogno_soma.prejudged_digest(text)` of the text the judge approved — written where your gate
+  checks that approval — and it matches the bytes the replay sent.
+
+The ledger then records `{"attempt": 1, "approved": true, "skipped": "prejudged_replay", …}`
+(`cogno_soma.JUDGE_SKIPS` — close your persisted alphabet from it). **No stamp, no skip**: a host
+that does not stamp keeps today's post-send judge, byte for byte. The anima's replay reads `tool`
+and `arguments` only, so the stamp never reaches the tool.
 
 ### 4.3 One more executor pass when the budget is spent
 

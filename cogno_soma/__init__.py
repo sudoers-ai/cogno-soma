@@ -13,8 +13,9 @@ from cogno_soma.errors import SomaError, StopPipeline
 from cogno_soma.hooks import HookFn, Hooks
 from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
-from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_READ, EXTRA_PASSES, Pipeline,
-                                 STOP_JUDGE_EXHAUSTED)
+from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_READ, EXTRA_PASSES,
+                                 JUDGE_SKIP_PREJUDGED_REPLAY, JUDGE_SKIPS, PREJUDGED_TEXT_SHA,
+                                 Pipeline, STOP_JUDGE_EXHAUSTED, prejudged_digest)
 from cogno_soma.session import SessionRunner
 from cogno_soma.stages import EgoStageProtocol, IDStageProtocol, SuperegoStageProtocol
 from cogno_soma.trace_cuts import (CUT_MARK, CUT_MARK_RE, TOOL_RESULT_CHARS,
@@ -38,6 +39,14 @@ __all__ = [
     "EXTRA_PASS_ACTION",
     "EXTRA_PASS_READ",
     "EXTRA_PASSES",
+    # Why a ledger row records an attempt the judge did NOT read (`judge_attempts[i]["skipped"]`),
+    # and the stamp that buys it: the HOST writes `PREJUDGED_TEXT_SHA` (with `prejudged_digest`,
+    # the one digest) where it checks that the judge approved a held message, and persists the
+    # ledger closing its alphabet from `JUDGE_SKIPS` — the same contract as `EXTRA_PASSES`.
+    "JUDGE_SKIP_PREJUDGED_REPLAY",
+    "JUDGE_SKIPS",
+    "PREJUDGED_TEXT_SHA",
+    "prejudged_digest",
     "SomaError",
     # ── the stage contract ───────────────────────────────────────────────────────────────
     # What `Pipeline(id_stage=…, ego=…, superego=…)` accepts, structurally. Exported so a host
