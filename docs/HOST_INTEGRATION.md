@@ -89,11 +89,12 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `tools_dropped`, `tools_offered_dropped` | how many past `_TOOLS_PER_ATTEMPT` were left out — present only when some were | `_attempt_tools` |
 | `tools_error` | the display list could not be built (the exception's TYPE); `committed` and `tools_offered` survive it | `_attempt_tools` |
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
+| `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed` or `read_owed` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
 
 The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surface_it_was_OFFERED`,
 `test_each_attempt_records_the_draft_the_judge_ACTUALLY_read`,
-`test_the_offered_cap_is_reported_on_BOTH_paths`) and
-`test_the_ledger_records_the_judges_branch.py`.
+`test_the_offered_cap_is_reported_on_BOTH_paths`),
+`test_the_ledger_records_the_judges_branch.py` and, for `extra_pass`, `test_one_turn_to_read.py`.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
@@ -160,6 +161,46 @@ Every other hold keeps the skip, byte for byte: no declaration, a declaration th
 mapping, or held calls whose tools the declaration does not name. A declared call whose text
 argument is missing or empty is still judged: an empty message is still a message about to be
 proposed. Requires a cogno-anima with `held_delivered_texts` (sudoers-ai/cogno-anima#183).
+
+### 4.3 One more executor pass when the budget is spent
+
+With a budget of one attempt (`plan_limits.max_self_corrections = 1`), a rejected attempt normally
+goes straight to the voice with the critique. Two rejections cannot be answered by re-voicing,
+because what is missing is a tool call and only the EGO calls tools. Each one buys ONE more EGO
+pass, under the same ceiling (`_ACTION_RETRY_CEILING`, two passes in all), so the two can never
+add up to a third:
+
+- **"you did not act"** (`_owes_an_action`): an ACTION_REQUEST, a tool your policy declares
+  mutating was offered, the EGO reached for none, and nothing was committed. It needs a
+  `ToolPolicyDispatcher`; without one, no pass is granted.
+- **"there is no X" over a source nobody read** (`_owes_a_read`): an INFORMATION_REQUEST whose
+  draft asserts absence (one closed PT/EN list, `_ABSENCE`), while a source read you DECLARE was
+  offered and no pass of the turn called any of them. Declare the names per turn in
+  `ctx.metadata[mk.SOURCE_READS]`, from your catalog; the core never guesses them from a tool's
+  name. The extra pass receives the critique plus one closed sentence naming the tool it did not
+  call, because a critique alone can tell the executor to repeat the negative.
+
+The read exception stays off in each of these cases:
+
+- **Nothing declared.** No declaration, an empty one or a garbled one grants nothing, so not
+  stamping the key is how you switch it off.
+- **The read was made.** A source read that was called, even one that failed or found nothing,
+  is never owed: "nothing relevant" is a true negative.
+- **A write committed.** A turn that committed gets neither exception.
+- **The budget already retries.** A budget of two or more retries anyway, and that retry keeps
+  the critique alone.
+
+The two exceptions never overlap: they are scoped to disjoint intent classes, and
+`_owes_an_action` is asked first. They also SHARE the ceiling, so even with both true a turn gets
+one extra pass, not two (pinned with both predicates forced true).
+
+**Counting it.** The rejected ledger entry that bought the pass carries
+`judge_attempts[i]["extra_pass"]` = `action_owed` | `read_owed`, a closed alphabet exported as
+`cogno_soma.EXTRA_PASSES`. The key is absent when no extra pass was granted on that rejection.
+Before it, a grant left only a DEBUG log line. What was offered and what was called are read by
+`cogno_anima.types.source_reads_not_called` over the anima's shared execution walk (the
+intra-turn consult included). Requires a cogno-anima with that predicate
+(sudoers-ai/cogno-anima#196).
 
 ## 5. Token accounting (for billing / control)
 

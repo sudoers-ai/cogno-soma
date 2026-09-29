@@ -13,7 +13,8 @@ from cogno_soma.errors import SomaError, StopPipeline
 from cogno_soma.hooks import HookFn, Hooks
 from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
-from cogno_soma.pipeline import Pipeline, STOP_JUDGE_EXHAUSTED
+from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_READ, EXTRA_PASSES, Pipeline,
+                                 STOP_JUDGE_EXHAUSTED)
 from cogno_soma.session import SessionRunner
 from cogno_soma.stages import EgoStageProtocol, IDStageProtocol, SuperegoStageProtocol
 from cogno_soma.trace_cuts import (CUT_MARK, CUT_MARK_RE, TOOL_RESULT_CHARS,
@@ -32,6 +33,11 @@ __all__ = [
     # its escalation caps both key on `stop_reason`), and a string literal copied there
     # would be a second definition of a contract that has already been wrong once.
     "STOP_JUDGE_EXHAUSTED",
+    # Which exception granted the one extra EGO pass (`judge_attempts[i]["extra_pass"]`).
+    # Exported for the same reason: the HOST persists the ledger and closes the alphabet.
+    "EXTRA_PASS_ACTION",
+    "EXTRA_PASS_READ",
+    "EXTRA_PASSES",
     "SomaError",
     # ── the stage contract ───────────────────────────────────────────────────────────────
     # What `Pipeline(id_stage=…, ego=…, superego=…)` accepts, structurally. Exported so a host

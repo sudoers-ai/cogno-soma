@@ -16,6 +16,39 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **One more EGO pass for a negative over a source nobody read (`_owes_a_read`, item (i)).**
+  The sibling of `_owes_an_action`, asked after it, under the same `_ACTION_RETRY_CEILING` (two
+  EGO passes in all). The shape, measured on a rehearsal tenant: an INFORMATION_REQUEST with the
+  document-reading tool on the table; the EGO called only an empty ledger summary; the draft said
+  "there are no records"; the judge rejected it; and with a budget of one the voice shipped the
+  same false negative, while the documents held the values. The voice cannot read.
+  - It fires only when three conditions hold together, all deterministic:
+    1. an INFORMATION_REQUEST that the judge rejected;
+    2. a host-declared source read (`mk.SOURCE_READS`) was offered and no pass called any of
+       them, read by `cogno_anima.types.source_reads_not_called` over the anima's shared walk
+       and never re-derived here;
+    3. the draft asserts absence, by one closed PT/EN list (`_ABSENCE`).
+  - It also carries the sibling's guard: a turn that committed gets nothing.
+  - The extra pass's `ego_correction.reason` is the critique plus one closed sentence
+    (`_READ_OWED_NOTE`) that names the tool that was not called.
+  - Reach, measured over 244 production turns (01/09 to 29/09, with a judge block and a table):
+    the wide shape matches 20 turns; with the negative, 4, none of them this defect; with the set
+    of one tool the host starts with, 0. On the rehearsal tenant it matches 4 of 4.
+  - Off without the declaration, so a host reverts the feature by not stamping the key.
+  - The two exceptions SHARE the ceiling: with both predicates forced true, a turn still gets
+    one extra pass.
+  - **Countable:** the rejected ledger entry that bought the pass carries `extra_pass`
+    (`action_owed` | `read_owed`, exported as `cogno_soma.EXTRA_PASSES`), absent otherwise. Until
+    now a grant, the action one included, left only a DEBUG log line.
+  - `tests/unit/test_one_turn_to_read.py` covers:
+    - the twin (red at the base, measured) and its pair with the source read on pass 1;
+    - the switch as ONE twin (declared → one extra pass; absent → none) and the shared ceiling;
+    - controls (a) to (f);
+    - condition 3, the committed guard, the ceiling and a budget of two;
+    - the absence list with its own twin;
+    - the REAL anima `EgoStage` over a scripted backend, which is handed the sentence and reads.
+  - `docs/HOST_INTEGRATION.md` §4.3. Requires sudoers-ai/cogno-anima#196.
+
 - **Each judge-ledger entry records which criteria its judge was given (`branch`).**
   `ctx.metadata["judge_attempts"][i]["branch"]` is the `SuperegoResult.judge_branch` that
   attempt's `evaluate` returned (`execution` | `conversational` | `readonly`) — the anima's own
