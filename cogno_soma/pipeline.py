@@ -23,11 +23,13 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
 from cogno_anima import metakeys as mk
-from cogno_anima.types import committed_this_turn, held_delivered_texts, wrote_for_the_contact
+from cogno_anima.types import (committed_this_turn, held_delivered_texts,
+                               source_reads_not_called, wrote_for_the_contact)
 from cogno_anima.stages.base import BaseStage
 from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
@@ -303,6 +305,111 @@ def _owes_an_action(ctx: PipelineContext, dispatcher) -> bool:
     if _reached_for_a_write(ctx):
         return False
     return _a_write_was_on_the_table(ctx, dispatcher)
+
+
+# ── the sibling: "there is no X" over a source nobody read ─────────────────────────────────
+#
+# Same asymmetry as the block above, on the READ side. Measured on a rehearsal tenant (the
+# shape, never its data):
+#
+#   an INFORMATION_REQUEST to a bookkeeping persona, the document-reading tool on the table
+#   the EGO called only the ledger summary, which came back empty
+#   the draft asserted ABSENCE: "there are no rent entries for that property"
+#   the judge REJECTED it, rightly, and its critique proposed repeating the negative
+#   budget 1 → no pass left; the voice shipped the same "there are no records", and it was
+#   FALSE: the documents held the four values
+#
+# The voice cannot read. Re-voicing rewrites the words over the same empty evidence, so the
+# only thing that answers this rejection is a pass that CALLS the tool, and calling happens in
+# the EGO. That is the precedent `_owes_an_action` set: a debt the judge cannot settle and the
+# executor can.
+#
+# THREE conditions, in conjunction, all deterministic, and each one is a control in
+# `tests/unit/test_one_turn_to_read.py`:
+#
+#   1. an INFORMATION_REQUEST that the judge rejected (the call site is the rejected branch);
+#   2. a host-DECLARED source read (`mk.SOURCE_READS`) was OFFERED and NO pass of the turn
+#      called ANY of them: `cogno_anima.types.source_reads_not_called`, over the anima's shared
+#      execution walk (the consult included), never re-derived here and never guessed from a
+#      tool name;
+#   3. the draft asserts ABSENCE, by one closed PT/EN list (`_ABSENCE`).
+#
+# Plus the guard the sibling already carries: a turn that COMMITTED gets nothing, because
+# re-running after a write commits a second time, whatever the intent class said.
+#
+# **Reach, measured before this was written.** Over 244 production turns (01/09→29/09, a judge
+# block and a table): the wide shape (any of four read tools on the table, not called) is 20;
+# with the negative it is 4, and none of the 4 is this defect (two were an empty ledger before
+# any document existed, with no document read on the table; two were pay estimates with another
+# knowledge read on the table). With the declared set of ONE tool the host starts with, the
+# production reach is 0, and the rehearsal tenant's is 4 of 4.
+#
+# What the extra pass carries: the critique PLUS one closed sentence of this module that NAMES
+# the tool (`_READ_OWED_NOTE`). Without it the executor receives only the critique, and the
+# measured critique told it to repeat the negative.
+#
+# WHAT IT DELIBERATELY DOES NOT DO:
+#
+#   * a read that was MADE and found nothing is a true negative and passes as today (the
+#     anima's predicate is all-or-nothing on the called side, `ok` absent);
+#   * an ACTION_REQUEST never reaches here: `_owes_an_action` is asked first and keeps its
+#     precedence, and the intent classes are disjoint anyway;
+#   * no declaration, no pass: a host reverts the feature by not stamping `mk.SOURCE_READS`;
+#   * it never takes a turn past `_ACTION_RETRY_CEILING` EGO passes, the same ceiling as the
+#     sibling, so the two can never add up to a third pass;
+#   * the sentence rides ONLY on the granted extra pass. A budget of 2 or more already retries,
+#     and its retry keeps the critique alone, byte for byte as before.
+
+# ONE definition, with its own twin (`test_the_absence_list_*`). Plural and gender inflections
+# of the listed words match (the left edge is a word boundary, the right edge is not, where the
+# word inflects), because "não existem registros" is the same claim as "não existe registro".
+_ABSENCE = re.compile(
+    r"\bnão\s+(?:há\b|existe|encontrei\b|consta|temos\b|está\s+disponível\b"
+    r"|estão\s+disponíveis\b)"
+    r"|\bnenhum"
+    r"|\bsem\s+(?:registro|dado|informaç)"
+    r"|\bthere\s+(?:is|are)\s+no\b"
+    r"|\bno\s+(?:records?|entry|entries|data)\b"
+    r"|\bnot\s+(?:found|available)\b",
+    re.IGNORECASE,
+)
+
+_READ_OWED_NOTE = ("Before stating that it does not exist, call {tools} — {verb} offered this "
+                   "turn and not called.")
+
+
+def _asserts_absence(text: Optional[str]) -> bool:
+    """Does the draft claim that something is NOT there? The closed list above, nothing else."""
+    return bool(text) and _ABSENCE.search(text or "") is not None
+
+
+def _owes_a_read(ctx: PipelineContext) -> "list[str]":
+    """The source reads this rejected INFORMATION_REQUEST owes, or ``[]``. See the block above.
+
+    Returns the NAMES (sorted by the anima), because the sentence that goes to the executor has
+    to say which tool it did not call. Any unreadable piece answers ``[]``: an extra pass is a
+    grant, and nothing here may cost the turn.
+    """
+    intent = ctx.intent
+    if intent is None or intent.intent_class != "INFORMATION_REQUEST":
+        return []
+    if committed_this_turn(ctx):   # the sibling's guard: re-running after a write commits twice
+        return []
+    owed = source_reads_not_called(ctx)
+    if not owed:
+        return []
+    ego = ctx.ego_result
+    if not _asserts_absence(ego.draft if ego is not None else ""):
+        return []
+    return owed
+
+
+def _read_owed_reason(critique: Optional[str], owed: "list[str]") -> str:
+    """The critique, then the closed sentence naming the tool(s) the turn did not call."""
+    tools = " or ".join(f"`{n}`" for n in owed)
+    note = _READ_OWED_NOTE.format(tools=tools, verb="it was" if len(owed) == 1 else "they were")
+    critique = (critique or "").strip()
+    return f"{critique}\n\n{note}" if critique else note
 
 
 def _cut(text: str, limit: int) -> str:
@@ -900,19 +1007,30 @@ class Pipeline:
             })
             if judge.approved:
                 break
+            owed_read: "list[str]" = []
             if attempt >= max_corrections:
                 # The budget is spent. ONE more pass, and only for a rejection that no amount of
                 # re-voicing can answer — see `_owes_an_action` and the block above it. The
                 # ceiling is what keeps this a single extra pass rather than a loop, and what
                 # makes the exception inert on any budget that already allowed a retry.
-                if attempt >= _ACTION_RETRY_CEILING or not _owes_an_action(ctx, dispatcher):
+                if attempt >= _ACTION_RETRY_CEILING:
                     break
-                logger.debug("action_retry_granted attempt=%s", attempt)
+                if _owes_an_action(ctx, dispatcher):
+                    logger.debug("action_retry_granted attempt=%s", attempt)
+                else:
+                    # The sibling, asked SECOND so the action exception keeps its precedence:
+                    # a negative over a source nobody read — see `_owes_a_read`.
+                    owed_read = _owes_a_read(ctx)
+                    if not owed_read:
+                        break
+                    logger.debug("read_retry_granted attempt=%s tools=%s", attempt,
+                                 ",".join(owed_read))
             # rejected → this EGO attempt becomes retry history; feed the critique back
             if ctx.ego_result:
                 ctx.retry_metrics.append(ctx.ego_result.metrics)
             await self._fire(hooks.on_rollback, ctx)
-            ctx.metadata[mk.EGO_CORRECTION] = {"reason": judge.critique, "attempt": attempt + 1}
+            reason = _read_owed_reason(judge.critique, owed_read) if owed_read else judge.critique
+            ctx.metadata[mk.EGO_CORRECTION] = {"reason": reason, "attempt": attempt + 1}
             # Gate-B replay is once-only: the confirmed calls were already executed on this
             # attempt (their outcome is in the trace) — a correction re-run must NOT replay
             # them, or a rejected-but-successful call would execute twice (double booking).
