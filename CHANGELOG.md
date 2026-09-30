@@ -15,6 +15,8 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
   `mk.SCOPE_OPTIONS_SELECTION` for the host to render its closed question. The call has its own
   ledger line (`superego_select`, in `retry_metrics`). The record is PER TURN: popped before the
   PII gate on every turn. Unset → the pipeline of before (`tests/unit/test_the_scope_selector.py`).
+  A `covered` pick lifts only with the anima's code-side evidence (a shared non-generic term);
+  `cogno-engram` joins this repo's CI chain because the anima reads it for that (fail-closed without).
 
 - **The runner's verbatim window is PUBLIC: `CONTEXT_WINDOW_GAP_SECONDS` (4 h) and
   `CONTEXT_WINDOW_EXCHANGES` (6)**, exported from `cogno_soma` and from `cogno_soma.session`, and

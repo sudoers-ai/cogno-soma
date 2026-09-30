@@ -86,7 +86,7 @@ async def test_a_covered_pick_lets_the_refused_turn_through(stub_embedder, stub_
     ego = FakeEgo()
     sel = Selector({"answers": ["Calendário acadêmico"], "maybe": ["Oficina de Fotografia"]})
     ctx = await _pipe(stub_embedder, route="EGO", ego=ego).run_turn(
-        _ctx("Quando começam as aulas do semestre?"),
+        _ctx("Onde vejo o calendário acadêmico do semestre?"),
         _cfg(stub_backend, scope_selector_backend=sel, scope_options=OPTIONS),
         dispatcher=dispatcher)
     assert sel.calls == 1
@@ -165,3 +165,18 @@ async def test_a_carried_record_is_dropped_on_a_turn_without_a_selection(stub_em
                                                 "suggested": ["Oficina de Fotografia"]}
     ctx = await _pipe(stub_embedder).run_turn(ctx, _cfg(stub_backend), dispatcher=dispatcher)
     assert mk.SCOPE_OPTIONS_SELECTION not in ctx.metadata
+
+
+async def test_a_covered_pick_without_evidence_does_not_lift(stub_embedder, stub_backend,
+                                                            dispatcher):
+    """The shape the anima's nightly measured (qwen3 covered the Wi-Fi with a capability): the
+    pick shares no term with the question, so the refusal stands and the count says why."""
+    sel = Selector({"answers": ["consult_material"], "maybe": []})
+    ctx = await _pipe(stub_embedder).run_turn(
+        _ctx("Qual é a senha do Wi-Fi da escola?"),
+        _cfg(stub_backend, scope_selector_backend=sel, scope_options=OPTIONS),
+        dispatcher=dispatcher)
+    assert ctx.stop_reason == "scope_blocked"
+    assert ctx.superego_result.response == "Não posso ajudar."
+    rec = ctx.metadata[mk.SCOPE_OPTIONS_SELECTION]
+    assert rec["outcome"] == "none" and rec["covered_unsupported"] == 1
