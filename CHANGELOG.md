@@ -6,6 +6,16 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **"Did you mean…?" on a refused turn: `TurnConfig.scope_selector_backend` + `scope_options`.**
+  Both or nothing. On a turn the scope guard BLOCKED, `cogno_anima.stages.scope_options` asks the
+  host-injected backend which of the host's CLOSED options the message is about. A `covered` pick
+  (the very thing asked) means the refusal was FALSE and the turn goes on to the EGO/voice — a
+  false refusal is corrected by letting it through, never by answering it with a question. Any
+  other outcome keeps the refusal byte for byte and leaves the record on
+  `mk.SCOPE_OPTIONS_SELECTION` for the host to render its closed question. The call has its own
+  ledger line (`superego_select`, in `retry_metrics`). The record is PER TURN: popped before the
+  PII gate on every turn. Unset → the pipeline of before (`tests/unit/test_the_scope_selector.py`).
+
 - **The runner's verbatim window is PUBLIC: `CONTEXT_WINDOW_GAP_SECONDS` (4 h) and
   `CONTEXT_WINDOW_EXCHANGES` (6)**, exported from `cogno_soma` and from `cogno_soma.session`, and
   the defaults of `SessionRunner(burst_gap_seconds=, max_history=)`. The host writes rows into the

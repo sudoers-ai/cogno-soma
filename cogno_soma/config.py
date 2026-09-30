@@ -63,6 +63,17 @@ class TurnConfig:
     noumeno_backend: Optional[LLMBackend] = None  # None → gen_backend
     ner_backend: Optional[LLMBackend] = None      # None → gen_backend
     scope_backend: Optional[LLMBackend] = None    # None → gen_backend
+    # "Did you mean…?" on a REFUSED turn (``cogno_anima.stages.scope_options``). Both must be
+    # set for anything to happen: the selector backend (the host injects it, the same pattern as
+    # every other op) and the CLOSED list it may pick from (the section titles this reader may
+    # read + the capability names on the turn's table — built by the host, per turn). On a turn
+    # the guard BLOCKED, a ``covered`` pick (the very thing asked) means the refusal was FALSE and
+    # the turn goes on to the EGO/voice as if the guard had allowed it; any other outcome keeps
+    # the refusal exactly as it is, and the record on ``mk.SCOPE_OPTIONS_SELECTION`` is what a
+    # host reads to turn a ``suggested`` one into its closed question. Unset → byte for byte the
+    # pipeline of before: the selector is never called and the key is never written.
+    scope_selector_backend: Optional[LLMBackend] = None
+    scope_options: tuple[str, ...] = ()
     judge_backend: Optional[LLMBackend] = None    # None → gen_backend
     # Two-tier judge: a cheap screening judge runs first on every EGO attempt; only its
     # REJECTIONS are re-judged by the strong judge (judge_backend), whose verdict is
