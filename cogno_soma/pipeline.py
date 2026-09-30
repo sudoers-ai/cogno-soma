@@ -20,6 +20,7 @@ that state for a multi-turn session.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import logging
@@ -420,6 +421,136 @@ def _read_owed_reason(critique: Optional[str], owed: "list[str]") -> str:
     note = _READ_OWED_NOTE.format(tools=tools, verb="it was" if len(owed) == 1 else "they were")
     critique = (critique or "").strip()
     return f"{critique}\n\n{note}" if critique else note
+
+
+# ── a held MESSAGE the judge already approved is not judged again once it is sent ───────────
+#
+# Measured on a downstream host (the shape; the data stays there): a staff reader said «sim» to a
+# proposed `notify_user`, the confirmed replay DELIVERED it (`ok=True`, `side_effect=True`), and
+# the judge then REJECTED the execution because the message carried a date, a class and a subject
+# "with no schedule read THIS turn" — the read had been made on the PROPOSAL turn. Budget 1, so
+# the turn ended in `human_handoff` before the voice, and the contact read the host's
+# deterministic «já foi realizado» instead of the voice, with a human requested over a message
+# that had gone out correctly.
+#
+# The judge was contradicting ITSELF, without new evidence: since M9 a proposal turn whose held
+# call sends text to a person is judged (`held_delivered_texts`, the loop below), the host
+# proposes such a message ONLY when that judge read it and approved it, and on the «sim» the
+# host lets out only the byte-exact call that was proposed, once. The post-send judge was
+# re-reading bytes it had already approved, against a turn that had no reason to read again —
+# and its rejection un-sends nothing: it only trades the voice for a handoff.
+#
+# So attempt 1 of a confirmed turn SKIPS the judge when, and only when, all four hold:
+#
+#   (a) what the attempt executed is EXACTLY the multiset of `mk.EGO_CONFIRMED_CALLS` (tool +
+#       canonical arguments) — a blocked re-issue of one of them (`duplicate`) executed nothing;
+#   (b) every one of those tools is DECLARED this turn as sending text to a person
+#       (`mk.HELD_DELIVERED_TEXT`, the declaration M9 already reads — never a tool name here);
+#   (c) every one came back `ok` AND `side_effect`;
+#   (d) every confirmed row carries the host's STAMP of that approval — the digest of the text
+#       the judge approved on the proposal turn (:data:`PREJUDGED_TEXT_SHA`) — and it matches the
+#       bytes that were SENT. No stamp, no skip: a host that does not stamp keeps today's judge.
+#
+# Anything else is judged exactly as today, and the ledger row is byte for byte what it was. The
+# skip itself is RECORDED, never silent: a row `{"attempt": 1, "approved": True, "skipped":
+# "prejudged_replay", …}` from the closed :data:`JUDGE_SKIPS`, exported so a host persisting the
+# ledger closes it from these constants (the `extra_pass` lesson: a key the host does not copy is
+# a key nobody can count).
+#
+# Scope, stated: this is the MINIMUM. The general form — carrying the PROPOSAL turn's reads to the
+# post-send judge as evidence, for any confirmed write — is a separate, larger change (it puts a
+# rule in the judge's prompt and tool results in the session state), and is not this one.
+
+#: The field of an ``mk.EGO_CONFIRMED_CALLS`` row that carries the host's stamp: the
+#: :func:`prejudged_digest` of the text the judge approved on the proposal turn. Written by the
+#: host where it checks that approval (its held-message gate), carried in the hold, handed back
+#: in the confirmed calls. The anima's replay reads ``tool`` and ``arguments`` only, so the field
+#: rides through it untouched.
+PREJUDGED_TEXT_SHA = "prejudged_text_sha"
+
+JUDGE_SKIP_PREJUDGED_REPLAY = "prejudged_replay"
+#: Why a ledger row records an attempt the judge did NOT read (``judge_attempts[i]["skipped"]``).
+#: ABSENT means the judge read that attempt.
+JUDGE_SKIPS = frozenset({JUDGE_SKIP_PREJUDGED_REPLAY})
+
+# The blocked re-issues the anima records as executions that ran nothing (`EgoStage`): a model
+# that calls the confirmed tool again after the replay is refused, not sent twice.
+_DUPLICATE_ERRORS = frozenset({"duplicate", "duplicate_in_step"})
+
+
+def prejudged_digest(text: object) -> "Optional[str]":
+    """The ONE digest of a delivered text for :data:`PREJUDGED_TEXT_SHA`: sha256 of its UTF-8
+    bytes, exactly as they are — no strip, no normalisation, because the question is whether the
+    bytes SENT are the bytes approved. ``None`` for anything that is not a string."""
+    if not isinstance(text, str):
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _canonical_call(tool: object, arguments: object) -> "Optional[tuple[str, str]]":
+    """``(tool, canonical JSON of the arguments)`` — sorted keys, no ASCII escaping, the same
+    identity the host's third-party gate uses for "the byte-exact call the user said yes to"."""
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        return None
+    try:
+        return (str(tool or ""), json.dumps(arguments, sort_keys=True, ensure_ascii=False,
+                                            default=repr))
+    except Exception:      # noqa: BLE001 — unreadable arguments match nothing
+        return None
+
+
+def _prejudged_replay(ctx: PipelineContext) -> bool:
+    """Is this attempt ONLY the replay of held messages the judge already approved? See above.
+
+    Every unreadable piece answers ``False`` — the judge of today. A skip is the exception here,
+    and nothing may be skipped on evidence that could not be read."""
+    try:
+        meta = ctx.metadata or {}
+        if not meta.get(mk.EGO_CONFIRMED):
+            return False
+        rows = meta.get(mk.EGO_CONFIRMED_CALLS)
+        declared = meta.get(mk.HELD_DELIVERED_TEXT)
+        ego = ctx.ego_result
+        if (not isinstance(rows, list) or not rows or not isinstance(declared, dict)
+                or ego is None or ego.pending_confirmation
+                or getattr(ctx, "consult_result", None) is not None):
+            return False
+        confirmed: "dict[tuple[str, str], list[str]]" = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                return False
+            key = _canonical_call(row.get("tool"), row.get("arguments"))
+            stamp = row.get(PREJUDGED_TEXT_SHA)
+            arg = declared.get(key[0]) if key else None
+            if key is None or not isinstance(arg, str) or not arg:         # (b)
+                return False
+            if not isinstance(stamp, str) or not stamp:                    # (d) no stamp
+                return False
+            confirmed.setdefault(key, []).append(stamp)
+        executed = []
+        for t in ego.tools_executed:
+            key = _canonical_call(t.tool, t.arguments)
+            if key is None:
+                return False
+            if t.ok is False and (t.error or "") in _DUPLICATE_ERRORS and key in confirmed:
+                continue                                  # a refused re-issue ran nothing
+            executed.append((key, t))
+        # (a) counts every call: each confirmed call executed exactly ONCE and nothing else. A
+        # multiset (sorted lists), never a set — a set would let a DOUBLE delivery through.
+        if sorted(k for k, _ in executed) != sorted(
+                k for k, stamps in confirmed.items() for _ in stamps):     # (a)
+            return False
+        for key, t in executed:
+            if t.ok is not True or t.side_effect is not True:              # (c)
+                return False
+            sent = prejudged_digest((t.arguments or {}).get(declared[key[0]]))
+            if sent is None or sent not in confirmed[key]:                 # (d) the bytes sent
+                return False
+        return True
+    except Exception:      # noqa: BLE001 — a skip needs evidence; none readable → the judge
+        return False
 
 
 def _cut(text: str, limit: int) -> str:
@@ -979,6 +1110,23 @@ class Pipeline:
             if (ctx.ego_result and ctx.ego_result.pending_confirmation
                     and not held_delivered_texts(ctx)):
                 judge = SuperegoResult(approved=True, metrics=_zero_metrics())
+                break
+            # …and the other end of the same message: the «sim» that REPLAYED it. A held message is
+            # proposed only after the judge approved those exact bytes, and the replay sends those
+            # bytes and nothing else — so, with the host's stamp of that approval in hand, a
+            # second read would judge the same text again with no new evidence (see
+            # `_prejudged_replay`). Recorded, never silent: the row says it was not read.
+            if attempt == 1 and _prejudged_replay(ctx):
+                judge = SuperegoResult(approved=True, metrics=_zero_metrics("superego_judge"))
+                ledger = ctx.metadata.get(mk.JUDGE_ATTEMPTS)
+                if not isinstance(ledger, list):
+                    ledger = []
+                    ctx.metadata[mk.JUDGE_ATTEMPTS] = ledger
+                ledger.append({"attempt": attempt, "approved": True, "critique": "",
+                               **_attempt_draft(ctx.ego_result),
+                               **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
+                               "skipped": JUDGE_SKIP_PREJUDGED_REPLAY})
+                logger.debug("judge_skipped reason=%s", JUDGE_SKIP_PREJUDGED_REPLAY)
                 break
             judge = await self._judge(ctx, cfg, attempt=attempt)
             # Record WHY, not just how many. The rejected attempts' critiques were fed into

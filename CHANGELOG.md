@@ -4,6 +4,31 @@
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
 
+### Added
+
+- **The «sim» that sends a held message the judge already approved is not judged again
+  (`_prejudged_replay`).** Measured downstream: a staff reader confirmed a proposed `notify_user`,
+  the replay delivered it, and the post-send judge rejected it for want of a read "this turn" —
+  the read, and the judge's own approval of those exact bytes, were on the proposal turn. Budget 1:
+  `human_handoff` before the voice, over a message that went out right.
+  - Attempt 1 of a confirmed turn skips the judge when ALL four hold: (a) it executed exactly the
+    multiset of `mk.EGO_CONFIRMED_CALLS`; (b) each tool is in `mk.HELD_DELIVERED_TEXT`; (c) each
+    came back `ok ∧ side_effect`; (d) each confirmed row carries the host's stamp
+    `PREJUDGED_TEXT_SHA` (`prejudged_digest` of the approved text) and it matches the bytes sent.
+  - Recorded, never silent: the ledger row carries `skipped: "prejudged_replay"`, exported as
+    `JUDGE_SKIPS` for the host's persisted alphabet (the `extra_pass` lesson).
+  - **No stamp, no skip**: a host that does not stamp keeps today's judge, byte for byte; each
+    control (an extra call, an undeclared tool, a failed replay, no confirmation, no stamp, a stamp
+    one byte off, a confirmed call that did not run, rows without the «sim» flag, a DOUBLE
+    delivery — one confirmed call executed twice, which (a) counts as a multiset — and a FAILED
+    extra call beside the ok replay, which only a blocked re-issue of a confirmed call is
+    excused from) is pinned
+    against the ledger `main` produced, and two more (a consult ran, another message was held
+    beside the replay) against the loop with the skip switched off.
+  - Not this change: carrying the PROPOSAL turn's reads to the post-send judge for any confirmed
+    write (a judge-prompt rule and tool results in session state — a separate, larger item).
+  - `tests/unit/test_a_prejudged_replay_is_not_judged_again.py`.
+
 ### Changed (docs)
 
 - **`docs/HOST_INTEGRATION.md` §4.1 lists every key of a judge-ledger entry** (Phase 2 docs
