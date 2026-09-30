@@ -40,6 +40,15 @@ save(session_id, sess.state)
 Persist `sess.state` (a plain dict) keyed by session id; reconstruct per request so
 a multi-worker deployment stays correct (no pinned in-memory instance).
 
+**The verbatim window is public.** Only the current time-burst of the transcript reaches the
+model verbatim as `[RECENT CONVERSATION]`: at most `CONTEXT_WINDOW_EXCHANGES` (6) exchanges,
+taken from the newest, stopping at the first one older than `CONTEXT_WINDOW_GAP_SECONDS` (4 h)
+before the current turn. Both are exported from `cogno_soma` and are the defaults of
+`SessionRunner(max_history=, burst_gap_seconds=)`. A host that writes rows into
+`sess.state["transcript"]` itself (a proactive turn, a delivered message) reads them to know
+whether its row is still in the window — never a copy of the numbers, and never the old private
+`_DEFAULT_BURST_GAP_SECONDS` (kept as an alias, so nothing breaks).
+
 ## 3. Hooks — interception + atomicity
 
 `Hooks` are optional callbacks (sync or async) fired at fixed points. Use them for:

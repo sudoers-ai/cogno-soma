@@ -88,7 +88,19 @@ _SOURCES_INSTRUCTION_NO_TRANSCRIPT = (
 # many seconds from the current turn drops out of the verbatim window (it may still be
 # represented, summarised and payload-free, by the host's EARLIER CONTEXT). Coarse on
 # purpose — the axis that matters is minutes-ago vs days-ago, not exact spacing.
-_DEFAULT_BURST_GAP_SECONDS = 4 * 60 * 60
+#
+# PUBLIC, and so is the exchange count beside it (2026-09-30): the window is a contract with
+# the HOST, which writes rows into this transcript itself (a proactive turn, a delivered
+# message) and has to know whether a row it wrote is still inside the window the model will
+# read. It used to import the private name across its pinned boundary — a name that promised
+# nothing and could be renamed in an ordinary refactor, with the host falling back to its own
+# copy of the number in silence. These are the defaults of ``SessionRunner(burst_gap_seconds=,
+# max_history=)``; a runner built with other values has another window, and the constants do
+# not describe it.
+CONTEXT_WINDOW_GAP_SECONDS: float = 4 * 60 * 60
+CONTEXT_WINDOW_EXCHANGES: int = 6
+# The old private spelling, kept as an alias so nothing that imported it breaks. Same object.
+_DEFAULT_BURST_GAP_SECONDS = CONTEXT_WINDOW_GAP_SECONDS
 
 
 class SessionRunner:
@@ -117,8 +129,8 @@ class SessionRunner:
         persona_id: Optional[str] = None,
         mcp_module: Optional[str] = None,
         force_language: Optional[str] = None,
-        max_history: int = 6,
-        burst_gap_seconds: float = _DEFAULT_BURST_GAP_SECONDS,
+        max_history: int = CONTEXT_WINDOW_EXCHANGES,
+        burst_gap_seconds: float = CONTEXT_WINDOW_GAP_SECONDS,
         state: Optional[dict] = None,
     ) -> None:
         self._pipeline = pipeline
