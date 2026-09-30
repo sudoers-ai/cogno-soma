@@ -46,6 +46,7 @@ jobs:
           # pip never tries to resolve them from PyPI when installing cogno-anima.
           pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
           pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
+          pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git"
           pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git"
           pip install -e ".[dev]"
       - name: Lint (ruff)
@@ -89,6 +90,7 @@ jobs:
           # tested main, the nightly tested a release from before the key existed.
           pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
           pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
+          pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git"
           pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git"
           pip install -e ".[dev]"
       - name: Integration suite (real model)

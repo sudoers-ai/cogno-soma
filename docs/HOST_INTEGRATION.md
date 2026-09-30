@@ -15,6 +15,7 @@ the seams a host wires up.
 | `dispatcher` | `run_turn(...)` / `SessionRunner` | the host's `ToolDispatcher` — your DB/MCP/API hands. Build it per turn with the request's auth/tenant scope. |
 | `ego_prompt` / `scope_prompt` / `limits_prompt` / `voice_prompt` | `TurnConfig` | the persona's four prompt slots, as plain strings. |
 | `block_message` | `TurnConfig` | PII-CRITICAL block reply, in your tenant's language; unset → the core's English fallback reaches the contact. Keep it a static constant — it is the only outgoing message that never passes the outgoing-PII detector (the blocked branch returns before `voice()`). |
+| `scope_selector_backend` / `scope_options` | `TurnConfig` | optional, per turn, and BOTH or nothing. On a turn the scope guard BLOCKED, the backend is asked which of the host's CLOSED options (the section titles this reader may read + the capability names on the turn's table) the message is about (`cogno_anima.stages.scope_options`). A `covered` pick (the very thing asked) means the refusal was FALSE: the turn goes on as if the guard had allowed it — a false refusal is never answered with a question. Anything else keeps the refusal byte for byte; the record on `ctx.metadata[mk.SCOPE_OPTIONS_SELECTION]` (popped at the start of every turn) is what you read to render a `suggested` one as your closed question. Unset → the selector is never called. |
 | `tool_result_limit` | `TurnConfig` | optional `Callable[[str], int]` — how many characters of ONE tool's result survive into the per-attempt judge ledger, per tool NAME. See **§4.1** below: if you persist that ledger and re-cut it, pass the SAME function you re-cut it with. |
 
 soma does **not** select the persona. Resolve it at the host (e.g. with
@@ -239,7 +240,7 @@ Every LLM call a turn makes lands on `ctx` — soma drops nothing:
 
 - per-stage: `ctx.noumeno_metrics`, `ner_metrics`, `id_metrics`, `ego_metrics`
   (the final EGO attempt), `superego_metrics` (the voice).
-- `ctx.retry_metrics` — the scope guard, **every** judge attempt, and each
+- `ctx.retry_metrics` — the scope guard (and its option selector, `superego_select`, when it ran), **every** judge attempt, and each
   **rejected** EGO attempt of the correction loop.
 - `ctx.stage_metrics` is the union of both; the totals sum over it:
 

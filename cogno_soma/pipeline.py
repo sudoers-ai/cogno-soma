@@ -36,6 +36,8 @@ from cogno_anima.stages.ego import EgoStage
 from cogno_anima.stages.id import IDStage
 from cogno_anima.stages.ner import IntentAnalyzer
 from cogno_anima.stages.noumeno import Noumeno
+from cogno_anima.stages.scope_options import OUTCOME_COVERED as SELECTION_COVERED
+from cogno_anima.stages.scope_options import select_scope_options
 from cogno_anima.stages.superego import (JUDGE_CONVERSATIONAL_BRANCH, JUDGE_EXECUTION,
                                          JUDGE_READONLY, SuperegoStage)
 from cogno_anima.tools import ToolDispatcher, ToolPolicyDispatcher
@@ -883,6 +885,10 @@ class Pipeline:
             _stamp(ctx, ctx.id_result.metrics if ctx.id_result else None)
             await self._fire(hooks.after_id, ctx)
 
+            # The scope selector's record is a PER-TURN fact: a carrier that holds metadata between
+            # turns must never make this turn wear an earlier turn's selection.
+            ctx.metadata.pop(mk.SCOPE_OPTIONS_SELECTION, None)
+
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
             if ctx.id_result and ctx.id_result.blocked:
                 ctx.superego_result = self._superego._blocked_response(
@@ -897,7 +903,9 @@ class Pipeline:
                     ctx, cfg.scope_backend or cfg.gen_backend, scope_prompt=cfg.scope_prompt)
                 _stamp(ctx, scope.metrics, prompt=_sha_for(ctx, "scope"))
                 ctx.retry_metrics.append(scope.metrics)
-                if scope.blocked:
+                if scope.blocked and await self._refusal_was_false(ctx, cfg):
+                    logger.info("scope_block_lifted reason=selector_covered")
+                elif scope.blocked:
                     ctx.superego_result = SuperegoResult(
                         response=scope.refusal_message, blocked=True, metrics=_zero_metrics())
                     ctx.stop_reason = "scope_blocked"
@@ -1069,6 +1077,25 @@ class Pipeline:
             return ctx
 
     # ── internals ─────────────────────────────────────────────────────
+    async def _refusal_was_false(self, ctx: PipelineContext, cfg: TurnConfig) -> bool:
+        """On a turn the scope guard BLOCKED: ask the host-injected selector whether one of the
+        host's closed options is the very thing the contact asked (``covered``). True → the
+        refusal was FALSE and the turn goes on. A false refusal is corrected by LETTING IT
+        THROUGH, never by answering it with a question — the question (``suggested``) is the
+        host's to render, over the record this leaves on ``mk.SCOPE_OPTIONS_SELECTION``.
+
+        Nothing is called unless BOTH the backend and a non-empty list are set. The selector
+        never raises (an error is ``error``, i.e. the refusal of today); its call gets its own
+        ledger line, stamped and folded into ``retry_metrics`` like the guard's."""
+        backend = cfg.scope_selector_backend
+        if backend is None or not cfg.scope_options:
+            return False
+        selection = await select_scope_options(ctx, backend, options=cfg.scope_options)
+        if selection.called:
+            _stamp(ctx, selection.metrics)
+            ctx.retry_metrics.append(selection.metrics)
+        return selection.outcome == SELECTION_COVERED
+
     async def _run_ego_loop(self, ctx, cfg: TurnConfig, dispatcher, hooks: Hooks):
         """The EGO⇄SUPEREGO correction loop; returns the last judge result."""
         attempt = 1
