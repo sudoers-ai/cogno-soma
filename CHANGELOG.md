@@ -6,6 +6,15 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **The runner's verbatim window is PUBLIC: `CONTEXT_WINDOW_GAP_SECONDS` (4 h) and
+  `CONTEXT_WINDOW_EXCHANGES` (6)**, exported from `cogno_soma` and from `cogno_soma.session`, and
+  the defaults of `SessionRunner(burst_gap_seconds=, max_history=)`. The host writes rows into the
+  transcript itself (a delivered message) and needs to know whether its row is still in the window;
+  it used to import the private `_DEFAULT_BURST_GAP_SECONDS` across its pinned boundary and keep its
+  own copy of the 6. The private name stays as an ALIAS (the same object), so nothing breaks.
+  `docs/HOST_INTEGRATION.md` § 2, `tests/unit/test_context_window_is_public.py` (the names at the
+  front door, the defaults, and a twin across each edge of the window).
+
 - **The «sim» that sends a held message the judge already approved is not judged again
   (`_prejudged_replay`).** Measured downstream: a staff reader confirmed a proposed `notify_user`,
   the replay delivered it, and the post-send judge rejected it for want of a read "this turn" —
