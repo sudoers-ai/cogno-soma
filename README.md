@@ -199,4 +199,10 @@ pytest tests/integration -q     # real stages over Ollama, auto-skips if absent
 ruff check cogno_soma tests && mypy cogno_soma
 ```
 
+`tests/unit` refuses Ollama by construction: `tests/unit/conftest.py` installs
+`tests/unit/_ollama_gate.py` for the whole session, so a unit test that tries to open a connection
+to Ollama (port 11434, or the host:port of `OLLAMA_BASE_URL`/`COGNO_OLLAMA_URL`/`OLLAMA_HOST`)
+raises `OllamaGateError` and FAILS — even when the code under test swallowed the refusal. The
+local Ollama is the GPU serving live traffic; inject a stub (`tests/conftest.py`).
+
 Apache-2.0.

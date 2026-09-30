@@ -6,6 +6,18 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **No UNIT test reaches the local Ollama — enforced, not promised** (2026-09-30).
+  `tests/unit/conftest.py` (new) installs `tests/unit/_ollama_gate.py` as a session-scoped autouse
+  fixture: `socket.socket.connect`/`connect_ex` (the lowest point, where every client ends) and
+  httpcore's `connect_tcp` (so the httpx path raises the gate's error unwrapped, not inside anyio's
+  `ExceptionGroup` — measured) refuse port 11434 on any host and the host:port of
+  `OLLAMA_BASE_URL`/`COGNO_OLLAMA_URL`/`OLLAMA_HOST` (read at connect time) with `OllamaGateError`;
+  a per-test fixture fails the test at teardown when an attempt was made, even one the code under
+  test swallowed. Why: the local Ollama is the GPU serving live traffic, and a host unit test that
+  left a backend `None` got the real `OllamaBackend` default and called `localhost:11434`.
+  `tests/integration` does not load it. `tests/unit/test_ollama_gate.py` pins the twins (on an
+  EMPTY loopback port declared as the Ollama, never 11434), the controls and the swallowed case.
+
 - **"Did you mean…?" on a refused turn: `TurnConfig.scope_selector_backend` + `scope_options`.**
   Both or nothing. On a turn the scope guard BLOCKED, `cogno_anima.stages.scope_options` asks the
   host-injected backend which of the host's CLOSED options the message is about. A `covered` pick
