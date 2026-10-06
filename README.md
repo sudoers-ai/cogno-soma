@@ -113,7 +113,8 @@ approval) → `after_ego` → voice → `after_superego` → `after_turn`.
 A **proposal** turn (the EGO held a call for the contact's "yes") skips the judge, because
 the action is incomplete on purpose. The exception is a held call that sends text to a
 person, which the host declares in `mk.HELD_DELIVERED_TEXT`: that text is final at the hold,
-so the turn is judged and rewritten like any other before it can be proposed — and the «sim»
+so the turn is judged and rewritten like any other before it can be proposed (on a budget of one,
+a rejected held message still gets ONE recomposition, `extra_pass: held_message_rejected`) — and the «sim»
 that replays it is not judged a second time when the host stamps that approval in the confirmed
 row (`PREJUDGED_TEXT_SHA`; the ledger row says `skipped: prejudged_replay`). See
 `docs/HOST_INTEGRATION.md` §4.2.
