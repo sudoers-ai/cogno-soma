@@ -36,7 +36,9 @@ pip install cogno-soma          # pulls cogno-anima + cogno-synapse
 ```
 
 > The sibling libs are not on PyPI yet — install them from git first
-> (`cogno-homeo`, then `cogno-synapse`, then `cogno-anima`); see `.github/workflows/ci.yml`.
+> (`cogno-homeo`, then `cogno-synapse`, then `cogno-engram`, then `cogno-anima`); see
+> `.github/workflows/ci.yml`. `cogno-engram` is in the chain because the anima's "did you mean…?"
+> selector reads its tokenizer, and fails closed without it (#57).
 
 ## Quick start — one turn
 
@@ -81,6 +83,12 @@ ctx = await sess.run("What's my balance?", memories=retrieved_facts)
 save_state(session_id, sess.state)      # persist the snapshot for the next request
 ```
 
+Only the current time-burst of the transcript reaches the model verbatim: at most
+`CONTEXT_WINDOW_EXCHANGES` (6) exchanges, none older than `CONTEXT_WINDOW_GAP_SECONDS` (4 h)
+before the turn. Both are exported from `cogno_soma` and are the defaults of
+`SessionRunner(max_history=, burst_gap_seconds=)`, so a host that writes rows into the
+transcript itself reads them instead of copying the numbers (#56; `docs/HOST_INTEGRATION.md` §2).
+
 ## Hooks — the interception seam
 
 Memory injection, safety screens, auditing and atomicity plug in as optional
@@ -115,8 +123,26 @@ the action is incomplete on purpose. The exception is a held call that sends tex
 person, which the host declares in `mk.HELD_DELIVERED_TEXT`: that text is final at the hold,
 so the turn is judged and rewritten like any other before it can be proposed — and the «sim»
 that replays it is not judged a second time when the host stamps that approval in the confirmed
-row (`PREJUDGED_TEXT_SHA`; the ledger row says `skipped: prejudged_replay`). See
+row (`PREJUDGED_TEXT_SHA`; the ledger row says `skipped: prejudged_replay`; #55). See
 `docs/HOST_INTEGRATION.md` §4.2.
+
+## When the guard refuses, and when the budget is spent
+
+- **A refusal the selector proves false is let through (#57).** When the host injects BOTH
+  `TurnConfig.scope_selector_backend` and `TurnConfig.scope_options` (a closed list it builds per
+  turn), a turn the scope guard BLOCKED gets one strict call to
+  `cogno_anima.stages.scope_options`. A `covered` pick means the refusal was false and the turn
+  goes on to the EGO and the voice. Any other outcome keeps the refusal byte for byte, and the
+  record on `mk.SCOPE_OPTIONS_SELECTION` is the host's to turn into its closed question. The call
+  has its own ledger line, `superego_select`, in `ctx.retry_metrics`. Without both fields the
+  selector is never called (`docs/HOST_INTEGRATION.md` §1).
+- **Two rejections buy ONE more EGO pass (#54).** With the correction budget spent, re-voicing
+  cannot supply a missing tool call, so `_owes_an_action` ("you did not act") and `_owes_a_read`
+  ("there is no X" over a source read the host declared in `mk.SOURCE_READS` and nobody called)
+  each grant one more executor pass, under one shared ceiling (`_ACTION_RETRY_CEILING`, two passes
+  in all). The rejected ledger entry that bought it says which, `extra_pass` = `action_owed` |
+  `read_owed` (`cogno_soma.EXTRA_PASSES`). No declaration, no read pass
+  (`docs/HOST_INTEGRATION.md` §4.3).
 
 ## The turn the agent opens
 
@@ -203,6 +229,6 @@ ruff check cogno_soma tests && mypy cogno_soma
 `tests/unit/_ollama_gate.py` for the whole session, so a unit test that tries to open a connection
 to Ollama (port 11434, or the host:port of `OLLAMA_BASE_URL`/`COGNO_OLLAMA_URL`/`OLLAMA_HOST`)
 raises `OllamaGateError` and FAILS — even when the code under test swallowed the refusal. The
-local Ollama is the GPU serving live traffic; inject a stub (`tests/conftest.py`).
+local Ollama is the GPU serving live traffic; inject a stub (`tests/conftest.py`) (#58).
 
 Apache-2.0.
