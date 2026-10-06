@@ -7,6 +7,31 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 ### Added
 
 - **No UNIT test reaches the local Ollama — enforced, not promised** (2026-09-30, #58).
+
+- **A held message the judge rejected is recomposed ONCE by the EGO, with the critique
+  (`_owes_a_held_rewrite`, `extra_pass: held_message_rejected`).** Measured live downstream: the
+  contact asked for a held message to be recomposed, the EGO composed a new one, the judge read it
+  (the anima's held-message rule, criterion (a)) and rejected it with a correct critique ("it must
+  mention today's class"); with a budget of one there was no pass left, so nothing was proposed and
+  the contact read the host's neutral sentence. The voice cannot answer it: the held text is a tool
+  argument only the EGO writes.
+  - The third sibling of `_owes_an_action`/`_owes_a_read`, under the same `_ACTION_RETRY_CEILING`
+    (two EGO passes in all) and asked FIRST of the three (precedence decides only the label).
+  - Fires when the rejected attempt is a held-message proposal (`pending_confirmation` and
+    `held_delivered_texts` both non-empty — exactly the proposal turns the loop judges) and
+    nothing was committed (`committed_this_turn`). The pass carries the critique alone in
+    `ego_correction`; its cost lands in `retry_metrics` like every rejected pass.
+  - Never executes anything unconfirmed: the recomposed message is held again by gates B/C (pinned
+    with the anima's REAL `EgoStage` and a policy dispatcher) and judged again — approved → the
+    host proposes it; rejected → today's outcome (same stop reason, voice correction and reply,
+    pinned against the predicate forced off), no third pass. Inert on a budget of two or more.
+  - `EXTRA_PASS_HELD_MESSAGE` joins the exported closed alphabet `EXTRA_PASSES`.
+  - `tests/unit/test_a_rejected_held_message_is_recomposed_once.py` (twin red at the base,
+    measured; FAB; controls: approved at once byte-identical, no held message, undeclared hold, a
+    commit, a budget of two; the shared ceiling; the alphabet). `docs/HOST_INTEGRATION.md` §4.2,
+    §4.3; `README.md`.
+
+- **No UNIT test reaches the local Ollama — enforced, not promised** (2026-09-30).
   `tests/unit/conftest.py` (new) installs `tests/unit/_ollama_gate.py` as a session-scoped autouse
   fixture: `socket.socket.connect`/`connect_ex` (the lowest point, where every client ends) and
   httpcore's `connect_tcp` (so the httpx path raises the gate's error unwrapped, not inside anyio's

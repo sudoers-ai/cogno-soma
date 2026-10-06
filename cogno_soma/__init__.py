@@ -13,9 +13,9 @@ from cogno_soma.errors import SomaError, StopPipeline
 from cogno_soma.hooks import HookFn, Hooks
 from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
-from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_READ, EXTRA_PASSES,
-                                 JUDGE_SKIP_PREJUDGED_REPLAY, JUDGE_SKIPS, PREJUDGED_TEXT_SHA,
-                                 Pipeline, STOP_JUDGE_EXHAUSTED, prejudged_digest)
+from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_HELD_MESSAGE, EXTRA_PASS_READ,
+                                 EXTRA_PASSES, JUDGE_SKIP_PREJUDGED_REPLAY, JUDGE_SKIPS,
+                                 PREJUDGED_TEXT_SHA, Pipeline, STOP_JUDGE_EXHAUSTED, prejudged_digest)
 from cogno_soma.session import (CONTEXT_WINDOW_EXCHANGES, CONTEXT_WINDOW_GAP_SECONDS,
                                 SessionRunner)
 from cogno_soma.stages import EgoStageProtocol, IDStageProtocol, SuperegoStageProtocol
@@ -45,6 +45,7 @@ __all__ = [
     # Exported for the same reason: the HOST persists the ledger and closes the alphabet.
     "EXTRA_PASS_ACTION",
     "EXTRA_PASS_READ",
+    "EXTRA_PASS_HELD_MESSAGE",
     "EXTRA_PASSES",
     # Why a ledger row records an attempt the judge did NOT read (`judge_attempts[i]["skipped"]`),
     # and the stamp that buys it: the HOST writes `PREJUDGED_TEXT_SHA` (with `prejudged_digest`,

@@ -99,7 +99,7 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `tools_dropped`, `tools_offered_dropped` | how many past `_TOOLS_PER_ATTEMPT` were left out — present only when some were | `_attempt_tools` |
 | `tools_error` | the display list could not be built (the exception's TYPE); `committed` and `tools_offered` survive it | `_attempt_tools` |
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
-| `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed` or `read_owed` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
+| `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed`, `read_owed` or `held_message_rejected` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
 | `skipped` | the judge did NOT read this attempt, and why: `prejudged_replay` (`cogno_soma.JUDGE_SKIPS`) — the «sim» that replayed a held message the judge had already approved (§4.2); absent when the judge read it | the loop |
 
 The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surface_it_was_OFFERED`,
@@ -163,7 +163,8 @@ any other turn, and the judge reads the held text itself (cogno-anima's
 
 - **approved**: the loop ends approved, and you propose the call as usual;
 - **rejected**: the critique goes back to the EGO (`ego_correction`), which rewrites the message
-  within the same correction budget;
+  within the same correction budget — and when that budget is ONE, the rejection still buys one
+  recomposition (`held_message_rejected`, §4.3), because only the EGO writes the held text;
 - **still rejected when the budget is spent**: the loop ends unapproved. `judge_verdict` is
   already set when `after_ego` fires, so a proposal gate there must not arm a confirmation over
   `approved: false`. Without such a gate, soma's own exhaustion path takes the turn
@@ -197,10 +198,20 @@ and `arguments` only, so the stamp never reaches the tool.
 ### 4.3 One more executor pass when the budget is spent
 
 With a budget of one attempt (`plan_limits.max_self_corrections = 1`), a rejected attempt normally
-goes straight to the voice with the critique. Two rejections cannot be answered by re-voicing,
-because what is missing is a tool call and only the EGO calls tools. Each one buys ONE more EGO
-pass, under the same ceiling (`_ACTION_RETRY_CEILING`, two passes in all), so the two can never
-add up to a third:
+goes straight to the voice with the critique. Three rejections cannot be answered by
+re-voicing, because what is missing is a tool call (or a tool ARGUMENT) and only the EGO writes
+those. Each one buys ONE more EGO pass, under the same ceiling (`_ACTION_RETRY_CEILING`, two
+passes in all), so they can never add up to a third:
+
+- **a held message the judge rejected** (`_owes_a_held_rewrite`, asked FIRST): the rejected
+  attempt is a held-message proposal (`pending_confirmation` non-empty and
+  `held_delivered_texts` non-empty, i.e. exactly the turns §4.2 judges), and nothing was
+  committed. The extra pass receives the critique alone in `ego_correction`, recomposes, and the
+  new message is HELD again by the same gates (the held tool is not confirmed on this turn, which
+  is why it was held) and judged again: approved → you propose it; rejected → the loop ends as it
+  did before this exception, with no third pass. Measured live: a recomposition the contact asked
+  for was rejected with a correct critique ("it must mention today's class") and, with a budget
+  of one, the contact read your neutral "the review did not approve the send".
 
 - **"you did not act"** (`_owes_an_action`): an ACTION_REQUEST, a tool your policy declares
   mutating was offered, the EGO reached for none, and nothing was committed. It needs a
@@ -222,12 +233,15 @@ The read exception stays off in each of these cases:
 - **The budget already retries.** A budget of two or more retries anyway, and that retry keeps
   the critique alone.
 
-The two exceptions never overlap: they are scoped to disjoint intent classes, and
-`_owes_an_action` is asked first. They also SHARE the ceiling, so even with both true a turn gets
-one extra pass, not two (pinned with both predicates forced true).
+The action and read exceptions never overlap: they are scoped to disjoint intent classes, and
+`_owes_an_action` is asked first. The held-message one is asked before both, because on that turn
+the critique is about the held text (precedence decides only the label: each grants the same
+pass). All three SHARE the ceiling, so even with all of them true a turn gets one extra pass, not
+two (pinned with the predicates forced true).
 
 **Counting it.** The rejected ledger entry that bought the pass carries
-`judge_attempts[i]["extra_pass"]` = `action_owed` | `read_owed`, a closed alphabet exported as
+`judge_attempts[i]["extra_pass"]` = `action_owed` | `read_owed` | `held_message_rejected`, a
+closed alphabet exported as
 `cogno_soma.EXTRA_PASSES`. The key is absent when no extra pass was granted on that rejection.
 Before it, a grant left only a DEBUG log line. What was offered and what was called are read by
 `cogno_anima.types.source_reads_not_called` over the anima's shared execution walk (the

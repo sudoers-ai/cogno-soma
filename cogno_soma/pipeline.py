@@ -388,7 +388,8 @@ _READ_OWED_NOTE = ("Before stating that it does not exist, call {tools} — {ver
 # so "the exception fired" could not be counted from anything persisted.
 EXTRA_PASS_ACTION = "action_owed"
 EXTRA_PASS_READ = "read_owed"
-EXTRA_PASSES = frozenset({EXTRA_PASS_ACTION, EXTRA_PASS_READ})
+EXTRA_PASS_HELD_MESSAGE = "held_message_rejected"
+EXTRA_PASSES = frozenset({EXTRA_PASS_ACTION, EXTRA_PASS_READ, EXTRA_PASS_HELD_MESSAGE})
 
 
 def _asserts_absence(text: Optional[str]) -> bool:
@@ -415,6 +416,50 @@ def _owes_a_read(ctx: PipelineContext) -> "list[str]":
     if not _asserts_absence(ego.draft if ego is not None else ""):
         return []
     return owed
+
+
+# ── the third sibling: a held MESSAGE the judge rejected is recomposed once ───────────────
+#
+# Measured live on a downstream host (the shape; the data stays there): the contact asked for a
+# held message to be recomposed, the EGO composed a NEW one and the confirmation gate held it,
+# the judge read the held text (the anima's held-message rule, criterion (a)) and REJECTED it
+# with the right critique — "it must mention today's class" — and with a budget of 1 there was
+# no pass left in which to obey it. Nothing was proposed and the contact read the host's neutral
+# "the review did not approve the send". The critique said what to write and nobody used it.
+#
+# The voice cannot answer this one either: the held text is a tool ARGUMENT the EGO wrote, and
+# the voice never writes it. So, like its two siblings, the rejection buys ONE more EGO pass with
+# the critique in `mk.EGO_CORRECTION`, under the SAME ceiling (`_ACTION_RETRY_CEILING`).
+#
+# The detection is the judgement that already happens: a rejected attempt is a held-message
+# proposal exactly when the loop judged it as one — `pending_confirmation` non-empty AND
+# `held_delivered_texts` non-empty (any other proposal turn skips the judge, so it has no
+# rejection to answer). Plus the siblings' guard: a turn that COMMITTED gets nothing, because
+# re-running after a write writes twice.
+#
+# Asked FIRST of the three. On a held-message turn the trace shows the judge read a held text,
+# so the critique is about that text; `_owes_an_action` reads "the executor never reached for a
+# write", which a held mutating call contradicts, and the read sibling's sentence about a tool
+# not called must not ride on a critique about a message. Precedence only decides the LABEL: all
+# three grant the same single pass.
+#
+# WHAT IT DOES NOT DO:
+#
+#   * it never executes anything unconfirmed: the pass is an ordinary EGO pass on the SAME turn,
+#     with the same `ego_confirmed` (none for the held tool — that is why it was held), so gates
+#     B and C hold the recomposed message exactly as they held the first one;
+#   * a second rejection ends the loop as today (the ceiling), with no third pass;
+#   * on a budget of 2 or more it is inert: the ordinary retry already recomposes.
+
+
+def _owes_a_held_rewrite(ctx: PipelineContext) -> bool:
+    """The rejected attempt was a held-message proposal, and nothing was committed."""
+    ego = ctx.ego_result
+    if ego is None or not ego.pending_confirmation:
+        return False
+    if not held_delivered_texts(ctx):
+        return False
+    return not committed_this_turn(ctx)
 
 
 def _read_owed_reason(critique: Optional[str], owed: "list[str]") -> str:
@@ -1201,7 +1246,12 @@ class Pipeline:
                 # makes the exception inert on any budget that already allowed a retry.
                 if attempt >= _ACTION_RETRY_CEILING:
                     break
-                if _owes_an_action(ctx, dispatcher):
+                if _owes_a_held_rewrite(ctx):
+                    # Asked FIRST: the judge read a held message and rejected it, so the
+                    # critique is about that text — see `_owes_a_held_rewrite`.
+                    entry["extra_pass"] = EXTRA_PASS_HELD_MESSAGE
+                    logger.debug("held_message_rewrite_granted attempt=%s", attempt)
+                elif _owes_an_action(ctx, dispatcher):
                     entry["extra_pass"] = EXTRA_PASS_ACTION
                     logger.debug("action_retry_granted attempt=%s", attempt)
                 else:

@@ -413,5 +413,7 @@ async def test_the_two_exceptions_SHARE_one_ceiling(stub_embedder, stub_backend,
 
 
 def test_the_extra_pass_alphabet_is_CLOSED_and_exported():
-    """The host persists this ledger and closes the field from these constants."""
-    assert EXTRA_PASSES == {EXTRA_PASS_ACTION, EXTRA_PASS_READ} == {"action_owed", "read_owed"}
+    """The host persists this ledger and closes the field from these constants. The third
+    member is the held-message recomposition (`test_a_rejected_held_message_is_recomposed_once`)."""
+    assert {EXTRA_PASS_ACTION, EXTRA_PASS_READ} == {"action_owed", "read_owed"}
+    assert EXTRA_PASSES == {"action_owed", "read_owed", "held_message_rejected"}
