@@ -6,6 +6,8 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **No UNIT test reaches the local Ollama — enforced, not promised** (2026-09-30, #58).
+
 - **A held message the judge rejected is recomposed ONCE by the EGO, with the critique
   (`_owes_a_held_rewrite`, `extra_pass: held_message_rejected`).** Measured live downstream: the
   contact asked for a held message to be recomposed, the EGO composed a new one, the judge read it
@@ -41,7 +43,7 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
   `tests/integration` does not load it. `tests/unit/test_ollama_gate.py` pins the twins (on an
   EMPTY loopback port declared as the Ollama, never 11434), the controls and the swallowed case.
 
-- **"Did you mean…?" on a refused turn: `TurnConfig.scope_selector_backend` + `scope_options`.**
+- **"Did you mean…?" on a refused turn: `TurnConfig.scope_selector_backend` + `scope_options` (#57).**
   Both or nothing. On a turn the scope guard BLOCKED, `cogno_anima.stages.scope_options` asks the
   host-injected backend which of the host's CLOSED options the message is about. A `covered` pick
   (the very thing asked) means the refusal was FALSE and the turn goes on to the EGO/voice — a
@@ -54,7 +56,7 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
   `cogno-engram` joins this repo's CI chain because the anima reads it for that (fail-closed without).
 
 - **The runner's verbatim window is PUBLIC: `CONTEXT_WINDOW_GAP_SECONDS` (4 h) and
-  `CONTEXT_WINDOW_EXCHANGES` (6)**, exported from `cogno_soma` and from `cogno_soma.session`, and
+  `CONTEXT_WINDOW_EXCHANGES` (6) (#56)**, exported from `cogno_soma` and from `cogno_soma.session`, and
   the defaults of `SessionRunner(burst_gap_seconds=, max_history=)`. The host writes rows into the
   transcript itself (a delivered message) and needs to know whether its row is still in the window;
   it used to import the private `_DEFAULT_BURST_GAP_SECONDS` across its pinned boundary and keep its
@@ -63,7 +65,7 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
   front door, the defaults, and a twin across each edge of the window).
 
 - **The «sim» that sends a held message the judge already approved is not judged again
-  (`_prejudged_replay`).** Measured downstream: a staff reader confirmed a proposed `notify_user`,
+  (`_prejudged_replay`, #55).** Measured downstream: a staff reader confirmed a proposed `notify_user`,
   the replay delivered it, and the post-send judge rejected it for want of a read "this turn" —
   the read, and the judge's own approval of those exact bytes, were on the proposal turn. Budget 1:
   `human_handoff` before the voice, over a message that went out right.
@@ -87,6 +89,14 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Changed (docs)
 
+- **The README catches up with #54–#58** (docs sweep, 2026-10-06). A new section, "When the guard
+  refuses, and when the budget is spent", states the "did you mean…?" selector letting a false
+  refusal through (#57) and the two extra EGO passes under one ceiling (#54). "Multi-turn
+  sessions" names the public verbatim window (#56). The install note adds `cogno-engram` to the
+  git chain, as `.github/workflows/ci.yml` installs it since #57. The prejudged-replay paragraph
+  and the Ollama gate note cite their PRs (#55, #58), and so do the five `Added` entries above.
+  Each points at `docs/HOST_INTEGRATION.md` rather than repeating it. Docs only.
+
 - **`docs/HOST_INTEGRATION.md` §4.1 lists every key of a judge-ledger entry** (Phase 2 docs
   sweep B). The prose named four of them — verdict, critique, draft, calls — while an entry also
   carries `draft_len`, `committed`, `tools_offered`, the two `*_dropped` counts, `tools_error` and
@@ -97,7 +107,7 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
-- **One more EGO pass for a negative over a source nobody read (`_owes_a_read`, item (i)).**
+- **One more EGO pass for a negative over a source nobody read (`_owes_a_read`, item (i), #54).**
   The sibling of `_owes_an_action`, asked after it, under the same `_ACTION_RETRY_CEILING` (two
   EGO passes in all). The shape, measured on a rehearsal tenant: an INFORMATION_REQUEST with the
   document-reading tool on the table; the EGO called only an empty ledger summary; the draft said
