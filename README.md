@@ -89,6 +89,12 @@ before the turn. Both are exported from `cogno_soma` and are the defaults of
 `SessionRunner(max_history=, burst_gap_seconds=)`, so a host that writes rows into the
 transcript itself reads them instead of copying the numbers (#56; `docs/HOST_INTEGRATION.md` §2).
 
+`run(..., split_context=True)` hands the composed context over by PROVENANCE, on two carriers.
+`ego_context` keeps the `[SOURCES]` instruction (this library's own text). `ego_context_untrusted`
+gets the layers other people wrote: the conversation, the earlier-session summary, the memories and
+the graph facts. `cogno-anima` renders that second carrier inside a fence. Off by default: one
+block, byte for byte as before (`docs/HOST_INTEGRATION.md` §2).
+
 ## Hooks — the interception seam
 
 Memory injection, safety screens, auditing and atomicity plug in as optional

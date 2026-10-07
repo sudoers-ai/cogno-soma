@@ -6,6 +6,21 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **`SessionRunner.run(split_context=True)` hands the context over by provenance, on two
+  carriers** (2026-10-07). The context the runner composes has two authors: the `[SOURCES]`
+  instruction is this library's, and the conversation, the earlier-session summary, the memories
+  and the graph facts were written by other people. In one block the two are the same unfenced
+  text, and a line typed inside a memory in the instruction's own style cannot be told from the
+  instruction. On, the instruction stays in `mk.EGO_CONTEXT` and the layers go to
+  `mk.EGO_CONTEXT_UNTRUSTED`, which `cogno-anima` renders inside a fence.
+  - **Off is the default and is byte for byte**: the test pins the whole block as a literal, and
+    it passes unchanged on the parent tree `ed81f9a`.
+  - On, the two carriers joined by a blank line ARE that block; with no layer the second key is
+    not set; `metadata=` still wins on both; `mk.CONVERSATION_HISTORY` does not move.
+  - Needs a `cogno-anima` with `mk.EGO_CONTEXT_UNTRUSTED`.
+  - `tests/unit/test_context_is_handed_over_by_provenance.py`: 11 tests, 10 red on `ed81f9a`
+    (the argument does not exist there) and the byte-for-byte control green on both.
+
 - **No UNIT test reaches the local Ollama — enforced, not promised** (2026-09-30, #58).
 
 - **A held message the judge rejected is recomposed ONCE by the EGO, with the critique

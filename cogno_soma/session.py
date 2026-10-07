@@ -167,6 +167,7 @@ class SessionRunner:
         dispatcher: Optional[ToolDispatcher] = None,
         metadata: Optional[dict] = None,
         now: Optional[float] = None,
+        split_context: bool = False,
     ) -> PipelineContext:
         """Run the next turn.
 
@@ -176,7 +177,15 @@ class SessionRunner:
         MEMORIES (``memories``, durable user facts) → KNOWLEDGE GRAPH (``graph_context``,
         tenant relations). All support layers are optional; ``metadata`` is merged last
         (host overrides win). ``now`` overrides the burst clock (default wall-clock) for
-        deterministic tests/replay."""
+        deterministic tests/replay.
+
+        ``split_context`` (default off: the context of before, byte for byte) hands the layers
+        over by PROVENANCE, on two carriers. ``mk.EGO_CONTEXT`` keeps what THIS library wrote —
+        the ``[SOURCES]`` instruction — and stays the place a host prepends its own notes.
+        ``mk.EGO_CONTEXT_UNTRUSTED`` gets every layer other people wrote: the conversation, the
+        earlier-session summary, the memories and the graph facts. ``cogno_anima`` renders that
+        second carrier inside a fence, as text an instruction in which is data. The host
+        decides; with no support layer at all the second key is not set."""
         self._turn += 1
         now = time.time() if now is None else now
         ctx = PipelineContext(user_input=user_input, force_language=self._force_language)
@@ -196,22 +205,34 @@ class SessionRunner:
         transcript = self._verbatim_transcript(now)
         instruction = (_SOURCES_INSTRUCTION if transcript
                        else _SOURCES_INSTRUCTION_NO_TRANSCRIPT)
-        blocks: list[str] = [f"[SOURCES]\n{instruction}"]
+        # Two lists, because the layers have two AUTHORS. `notes` is this library's own text;
+        # `data` is what other people wrote — the contact's words, a model's summary of them,
+        # facts extracted from them. Joined in that order they are the single block of before.
+        notes: list[str] = [f"[SOURCES]\n{instruction}"]
+        data: list[str] = []
         if transcript:
-            blocks.append("[RECENT CONVERSATION]\n" + transcript)
+            data.append("[RECENT CONVERSATION]\n" + transcript)
             # The perception stages (NOUMENO/NER) read this to resolve a bare follow-up
             # ("com o Heitor Lacerda") against the assistant's last question instead of
             # classifying it UNKNOWN and scope-blocking — same burst-scoped view.
             ctx.metadata[mk.CONVERSATION_HISTORY] = transcript
         if prior_summary:
-            blocks.append("[EARLIER CONTEXT]\n" + prior_summary)
+            data.append("[EARLIER CONTEXT]\n" + prior_summary)
         if memories:
-            blocks.append("[MEMORIES]\n" + "\n".join(memories))
+            data.append("[MEMORIES]\n" + "\n".join(memories))
         if graph_context:
-            blocks.append("[KNOWLEDGE GRAPH]\n" + graph_context)
+            data.append("[KNOWLEDGE GRAPH]\n" + graph_context)
         # Always set EGO_CONTEXT (the SOURCES instruction alone is worth carrying) so the host's
         # own stamps (which prepend to EGO_CONTEXT) still land on a purely-social first turn.
-        ctx.metadata[mk.EGO_CONTEXT] = "\n\n".join(blocks)
+        if split_context:
+            # By PROVENANCE: the instruction stays where a host's notes go, and everything a
+            # third party wrote travels apart, to be rendered inside a fence. A `[SOURCES]`
+            # typed inside a memory is then inside that fence, whatever it looks like.
+            ctx.metadata[mk.EGO_CONTEXT] = "\n\n".join(notes)
+            if data:
+                ctx.metadata[mk.EGO_CONTEXT_UNTRUSTED] = "\n\n".join(data)
+        else:
+            ctx.metadata[mk.EGO_CONTEXT] = "\n\n".join(notes + data)
         if metadata:
             ctx.metadata.update(metadata)
 
