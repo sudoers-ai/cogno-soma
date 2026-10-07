@@ -27,6 +27,8 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
     was asked this turn" on those turns too.
   - Nothing a turn DECIDES changes: `_judge` returns the same verdict (and, beside it, the fast
     read). `tests/unit/test_the_ledger_records_how_the_verdict_was_read.py`.
+  - **CI pin:** `.github/workflows/ci.yml` installs cogno-anima at `1923c85` (0.1.3, the release
+    that carries `verdict_read`) in both install steps; the other three sibling pins do not move.
 
 ### Fixed
 
