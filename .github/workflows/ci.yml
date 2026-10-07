@@ -47,7 +47,10 @@ jobs:
           pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
           pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
           pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git"
-          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git"
+          # PINNED (2026-10-07): `run(split_context=True)` needs a cogno-anima that has
+          # `mk.EGO_CONTEXT_UNTRUSTED` (anima #213), and an unpinned install is not a reproducible
+          # one. The three siblings above still float.
+          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@8f3970b8e292ca037e933b66d1ebe6abf522e0db"
           pip install -e ".[dev]"
       - name: Lint (ruff)
         run: ruff check cogno_soma tests examples
@@ -91,7 +94,10 @@ jobs:
           pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
           pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
           pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git"
-          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git"
+          # PINNED (2026-10-07): `run(split_context=True)` needs a cogno-anima that has
+          # `mk.EGO_CONTEXT_UNTRUSTED` (anima #213), and an unpinned install is not a reproducible
+          # one. The three siblings above still float.
+          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@8f3970b8e292ca037e933b66d1ebe6abf522e0db"
           pip install -e ".[dev]"
       - name: Integration suite (real model)
         env:
