@@ -41,6 +41,7 @@ from cogno_anima.stages.scope_options import select_scope_options
 from cogno_anima.stages.superego import (JUDGE_CONVERSATIONAL_BRANCH, JUDGE_EXECUTION,
                                          JUDGE_READONLY, SuperegoStage)
 from cogno_anima.tools import ToolDispatcher, ToolPolicyDispatcher
+from cogno_anima.verdict import VALID_VERDICT_READS
 from cogno_anima.types import (IntentResult, NoumenoResult, PipelineContext,
                                StageMetrics, SuperegoResult)
 from cogno_synapse import Embedder
@@ -848,6 +849,54 @@ def _attempt_branch(judge) -> dict:
     return {"branch": branch} if isinstance(branch, str) and branch in _JUDGE_BRANCHES else {}
 
 
+# ── HOW the judge's verdict was READ, per attempt ─────────────────────────────────────────
+#
+# `SuperegoStage.evaluate` reads its verdict strictly (cogno-anima 0.1.3: only a JSON boolean
+# counts) and says how the read went on `SuperegoResult.verdict_read`, from the closed
+# `cogno_anima.verdict.VALID_VERDICT_READS`. `boolean` means `approved` is what the judge SAID;
+# every other value is the fail-CLOSED fallback — a rejection this loop cannot tell from one
+# the judge gave unless the read travels with it. The loop kept the result and dropped the
+# field, exactly as it once dropped `judge_branch`, so the rate of non-boolean verdicts per
+# model could not be counted from anything a host persists.
+#
+# The KEYS are exported: a host that persists the ledger reads them from here and closes the
+# values with anima's alphabet — neither is retyped downstream.
+LEDGER_VERDICT_READ = "verdict_read"
+LEDGER_FAST_VERDICT_READ = "fast_verdict_read"
+
+
+def _verdict_read(judge) -> str:
+    """The read a verdict reports, when it is one of the closed alphabet — ``""`` otherwise.
+
+    ``""`` is what a stand-in judge that reports nothing gives (and what anima gives on the
+    path that asked no verdict); a label from outside the alphabet is dropped, never written,
+    for the reason ``_attempt_branch`` states: the ledger rides in metadata a host persists."""
+    read = getattr(judge, "verdict_read", "")
+    return read if isinstance(read, str) and read in VALID_VERDICT_READS else ""
+
+
+def _attempt_read(judge, fast_read: str = "") -> dict:
+    """The ledger fields for how this attempt's verdict was read.
+
+    ``verdict_read`` is the read of the verdict that DECIDED the attempt. ``fast_verdict_read``
+    is present only when a fast judge ran first AND the attempt escalated past it: then the
+    deciding verdict is the strong judge's, and without this second key an unreadable reply of
+    the FAST model would be counted nowhere — the escalation that repairs it also hides it.
+    When the fast judge approved, its verdict is the deciding one and its read is
+    ``verdict_read``.
+
+    Both keys are ABSENT when there is nothing to say — a stand-in that reports no read, an
+    attempt the judge did not read — because absent ("not on record") and ``boolean`` are
+    different answers and a default would merge them."""
+    out: dict = {}
+    read = _verdict_read(judge)
+    if read:
+        out[LEDGER_VERDICT_READ] = read
+    if fast_read:
+        out[LEDGER_FAST_VERDICT_READ] = fast_read
+    return out
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -957,6 +1006,11 @@ class Pipeline:
             # The scope selector's record is a PER-TURN fact: a carrier that holds metadata between
             # turns must never make this turn wear an earlier turn's selection.
             ctx.metadata.pop(mk.SCOPE_OPTIONS_SELECTION, None)
+            # …and so is HOW the guard's verdict was read. The guard removes it itself on the
+            # paths where it asks no verdict — but only when it is CALLED, and two exits below
+            # never call it (the PII gate, a turn with no scope prompt). ABSENT has to mean "no
+            # verdict was asked this turn", so the key is cleared before either of them.
+            ctx.metadata.pop(mk.SCOPE_VERDICT_READ, None)
 
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
             if ctx.id_result and ctx.id_result.blocked:
@@ -1224,7 +1278,7 @@ class Pipeline:
                                "skipped": JUDGE_SKIP_PREJUDGED_REPLAY})
                 logger.debug("judge_skipped reason=%s", JUDGE_SKIP_PREJUDGED_REPLAY)
                 break
-            judge = await self._judge(ctx, cfg, attempt=attempt)
+            judge, fast_read = await self._judge(ctx, cfg, attempt=attempt)
             # Record WHY, not just how many. The rejected attempts' critiques were fed into
             # EGO_CORRECTION.reason (overwritten each attempt) and then dropped, so after the
             # turn the only surviving fact was the count — and a red bench check could not be
@@ -1258,6 +1312,7 @@ class Pipeline:
                 **_attempt_draft(ctx.ego_result),
                 **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
                 **_attempt_branch(judge),
+                **_attempt_read(judge, fast_read),
             }
             ledger.append(entry)
             if judge.approved:
@@ -1307,28 +1362,36 @@ class Pipeline:
                                               "attempts": attempt}
         return judge
 
-    async def _judge(self, ctx, cfg: TurnConfig, *, attempt: int = 0):
-        """One judge verdict, optionally two-tier (``judge_fast_backend``).
+    async def _judge(self, ctx, cfg: TurnConfig, *, attempt: int = 0) -> "tuple[SuperegoResult, str]":
+        """One judge verdict, optionally two-tier (``judge_fast_backend``) — and, beside it, how
+        the FAST judge's verdict was read when the attempt escalated past it (``""`` otherwise).
 
         The fast judge screens every attempt; only its REJECTIONS escalate to the
         strong judge, whose verdict is authoritative. A fast approve is final (the
         cost bet), and fail-CLOSED is preserved: nothing gets approved that neither
         judge approved. Every call's metrics land in ``retry_metrics`` (the judge is
         never the "main" superego — voice is), distinguished by the model field.
+
+        A fast verdict that could not be READ is a fast rejection (anima fails closed), so it
+        escalates like any other — which is the right repair, and would also erase the only
+        record that the fast model answered in something other than a JSON boolean. Hence the
+        second element: the read of the verdict that was escalated past, for the ledger.
         """
         strong = cfg.judge_backend or cfg.gen_backend
         fast = cfg.judge_fast_backend
+        fast_read = ""
         if fast is not None and fast is not strong:
             verdict = await self._superego.evaluate(ctx, fast, limits_prompt=cfg.limits_prompt)
             _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx))
             ctx.retry_metrics.append(verdict.metrics)
             if verdict.approved:
-                return verdict
+                return verdict, ""
+            fast_read = _verdict_read(verdict)
             logger.debug("judge_escalated fast_model=%s", getattr(fast, "model", "unknown"))
         verdict = await self._superego.evaluate(ctx, strong, limits_prompt=cfg.limits_prompt)
         _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx))
         ctx.retry_metrics.append(verdict.metrics)
-        return verdict
+        return verdict, fast_read
 
     async def _finish(self, ctx, hooks: Hooks) -> PipelineContext:
         # The stamp counter is bookkeeping, not a contract: every exit goes through here, so

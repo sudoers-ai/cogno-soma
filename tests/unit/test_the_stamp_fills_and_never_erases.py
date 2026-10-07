@@ -158,6 +158,27 @@ async def test_control_a_stage_with_no_template_stays_unlabelled_and_a_stage_tha
     assert "ego" not in {m.stage for m in ctx.stage_metrics}
 
 
+async def test_control_a_SEATED_perception_runs_no_template_and_keeps_an_empty_sha():
+    """The turn the AGENT opens has no utterance to perceive: the host seats a precomputed
+    NOUMENO and NER result and no model is asked. No template ran, so there is no digest — the
+    row is stamped (it has its place in the turn) and its sha stays ``""``. The fix must not
+    invent one for it."""
+    from cogno_soma import opening_perception
+
+    noumeno_backend, ner_backend = _Scripted(_NOUMENO_REPLY), _Scripted(_NER_REPLY)
+    noumeno, ner, embedder = _real_perception()
+    pipe = Pipeline(embedder=embedder, noumeno=noumeno, ner=ner,
+                    id_stage=FakeID(route="SUPEREGO"), ego=FakeEgo(), superego=FakeSuperego())
+    cfg = TurnConfig(gen_backend=StubBackend(), ego_backend=StubBackend(), ego_prompt="x",
+                     noumeno_backend=noumeno_backend, ner_backend=ner_backend,
+                     voice_prompt="voice", **opening_perception())
+    ctx = await pipe.run_turn(PipelineContext(user_input="", force_language="pt"), cfg,
+                              dispatcher=RecordingDispatcher())
+    assert (noumeno_backend.calls, ner_backend.calls) == (0, 0), "the premise: nothing was asked"
+    assert ctx.noumeno.metrics.prompt_sha == "" and ctx.noumeno.metrics.seq == 1
+    assert ctx.intent.metrics.prompt_sha == "" and ctx.intent.metrics.seq == 2
+
+
 # ── the class, field by field ──────────────────────────────────────────────────────────────
 
 def _stamped() -> "tuple[PipelineContext, StageMetrics]":

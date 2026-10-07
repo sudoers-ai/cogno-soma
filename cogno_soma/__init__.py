@@ -15,6 +15,7 @@ from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
 from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_HELD_MESSAGE, EXTRA_PASS_READ,
                                  EXTRA_PASSES, JUDGE_SKIP_PREJUDGED_REPLAY, JUDGE_SKIPS,
+                                 LEDGER_FAST_VERDICT_READ, LEDGER_VERDICT_READ,
                                  PREJUDGED_TEXT_SHA, Pipeline, STOP_JUDGE_EXHAUSTED, prejudged_digest)
 from cogno_soma.session import (CONTEXT_WINDOW_EXCHANGES, CONTEXT_WINDOW_GAP_SECONDS,
                                 SessionRunner)
@@ -53,6 +54,11 @@ __all__ = [
     # ledger closing its alphabet from `JUDGE_SKIPS` — the same contract as `EXTRA_PASSES`.
     "JUDGE_SKIP_PREJUDGED_REPLAY",
     "JUDGE_SKIPS",
+    # The ledger keys for HOW a judge verdict was read (`judge_attempts[i]["verdict_read"]`, and
+    # `["fast_verdict_read"]` when a fast judge was escalated past). The VALUES are
+    # `cogno_anima.VALID_VERDICT_READS`; a host persisting the ledger reads the keys from here.
+    "LEDGER_VERDICT_READ",
+    "LEDGER_FAST_VERDICT_READ",
     "PREJUDGED_TEXT_SHA",
     "prejudged_digest",
     "SomaError",

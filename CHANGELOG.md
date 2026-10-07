@@ -4,6 +4,30 @@
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
 
+### Added
+
+- **The per-attempt ledger records HOW the judge's verdict was read** (2026-10-07; needs
+  cogno-anima ≥ 0.1.3, and the dependency floor says so). anima now reads the judge's verdict
+  strictly — only a JSON boolean counts — and reports the read on `SuperegoResult.verdict_read`.
+  This loop kept the result and dropped that field, so a rejection the judge GAVE and a rejection
+  anima fell back to (a verdict in a string, a duplicated key, no JSON) were the same ledger row,
+  and the rate of non-boolean verdicts per model could not be counted from anything a host
+  persists.
+  - `judge_attempts[i]["verdict_read"]` — the read of the verdict that DECIDED the attempt, a
+    value of `cogno_anima.VALID_VERDICT_READS`. Only the value; never a byte of the reply.
+  - `judge_attempts[i]["fast_verdict_read"]` — only when a fast judge ran first and the attempt
+    escalated past it. A fast verdict that cannot be read is a fast rejection, so it escalates:
+    the right repair, which without this key would erase the only record of it.
+  - Both keys ABSENT when there is nothing to say: a stand-in judge that reports no read, a
+    `skipped` row (no judge was called), a label outside the alphabet.
+  - The keys are exported — `cogno_soma.LEDGER_VERDICT_READ`, `LEDGER_FAST_VERDICT_READ` — so a
+    host persisting the ledger reads them from here and the values from anima.
+  - **The guard's read** (`ctx.metadata["scope_verdict_read"]`, anima's) is cleared before the two
+    exits that never call the guard (no scope prompt; the PII gate), so ABSENT means "no verdict
+    was asked this turn" on those turns too.
+  - Nothing a turn DECIDES changes: `_judge` returns the same verdict (and, beside it, the fast
+    read). `tests/unit/test_the_ledger_records_how_the_verdict_was_read.py`.
+
 ### Fixed
 
 - **The stage stamp ERASED the `prompt_sha` of NOUMENO and NER** (2026-10-07). `_stamp` wrote
@@ -33,11 +57,23 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
     seeds that metakey with an attempt other than 1 BEFORE the turn. There the executor reports
     the host's number on `EgoResult.attempt` and the stamped row says the loop's — the axis the
     judge ledger and every other row of the turn are on. Pinned by a test over seeds 1, 2 and 5.
-  - **No replay over stored traces:** the digest of a past turn's template is not recoverable
-    from a trace that stored `""` — the erased value is the missing one. What IS determinable
-    without re-running a turn: both stages stamp a non-empty digest on every call that returns
-    (`metrics.prompt_sha=self._prompt_sha`, unconditional in `cogno-anima`), so every one of those
-    turns would carry both.
+  - **Replay, with its ruler.** The erased digest is not recoverable from a trace that stored
+    `""` — the erased value is the missing one. What IS determinable without re-running a turn
+    is on how many of those rows the stage actually RAN: anima stamps the digest on every call
+    that returns, so each of those carries one after this fix. Counted on a downstream host's
+    exported stage rows (the traces of three days that hold at least one `noumeno` row): **141
+    of 141 `noumeno` rows and 141 of 141 `ner` rows — in 117 traces, 19 of them with more than
+    one pass — ran the stage** (a model answered, input tokens above zero) with an empty
+    `prompt_sha`, **and would carry it. 0 rows are a seated result.** The unit is the stage
+    ROW, not the trace. The other shape — a turn whose perception the host SEATED
+    (`TurnConfig.noumeno_result` / `intent_result`, no model call), which keeps `""` because no
+    template ran — does not occur in that window: it is proven by the test, not by the corpus.
+    The same export confirms the controls: the ID's row is empty on 141 of 141 (by design),
+    and the executor, the judge and the scope guard carry the host's label.
+  - **Not fixed here, declared:** the pre-judge (`judge_pre`) rows carry no digest either, for
+    a different reason — `cogno_anima.stages.ProposalJudge` never stamps one on its metrics,
+    and those rows do not pass through this stamp at all (a host files them). That is a change
+    in cogno-anima, queued.
   `tests/unit/test_the_stamp_fills_and_never_erases.py`: the twin, the controls, each field one
   by one, and the nine `_stamp` call sites read off the source.
 
