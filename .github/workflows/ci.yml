@@ -44,12 +44,14 @@ jobs:
           python -m pip install --upgrade pip
           # Runtime deps not yet on PyPI — install the chain bottom-up from git so
           # pip never tries to resolve them from PyPI when installing cogno-anima.
-          pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
-          pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
-          pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git"
-          # PINNED (2026-10-07): `run(split_context=True)` needs a cogno-anima that has
-          # `mk.EGO_CONTEXT_UNTRUSTED` (anima #213), and an unpinned install is not a reproducible
-          # one. The three siblings above still float.
+          pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git@9ff238c743bd867de64d24dd9e597c073daf30f7"
+          pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git@d2766784face38b0776aebe2926f6ad305a06979"
+          pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git@c3201fe1d7e99686cb8a3b8444c513aff738fac0"
+          # EVERY sibling is PINNED by SHA (2026-10-07): an unpinned install is not a reproducible
+          # one, and a sibling's landing could turn this suite red with nobody having touched it.
+          # homeo, synapse and engram are the SHAs cogno-host's own ci.yml pins; cogno-anima is
+          # the #213 merge, because `run(split_context=True)` needs `mk.EGO_CONTEXT_UNTRUSTED`.
+          # Moving a pin is a deliberate edit of this file.
           pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@8f3970b8e292ca037e933b66d1ebe6abf522e0db"
           pip install -e ".[dev]"
       - name: Lint (ruff)
@@ -91,12 +93,14 @@ jobs:
           # can the log. That is how this job spent four nights red on
           # `module 'cogno_anima.metakeys' has no attribute 'JUDGE_VERDICT'`: the unit job
           # tested main, the nightly tested a release from before the key existed.
-          pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git"
-          pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git"
-          pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git"
-          # PINNED (2026-10-07): `run(split_context=True)` needs a cogno-anima that has
-          # `mk.EGO_CONTEXT_UNTRUSTED` (anima #213), and an unpinned install is not a reproducible
-          # one. The three siblings above still float.
+          pip install "cogno-homeo @ git+https://github.com/sudoers-ai/cogno-homeo.git@9ff238c743bd867de64d24dd9e597c073daf30f7"
+          pip install "cogno-synapse @ git+https://github.com/sudoers-ai/cogno-synapse.git@d2766784face38b0776aebe2926f6ad305a06979"
+          pip install "cogno-engram @ git+https://github.com/sudoers-ai/cogno-engram.git@c3201fe1d7e99686cb8a3b8444c513aff738fac0"
+          # EVERY sibling is PINNED by SHA (2026-10-07): an unpinned install is not a reproducible
+          # one, and a sibling's landing could turn this suite red with nobody having touched it.
+          # homeo, synapse and engram are the SHAs cogno-host's own ci.yml pins; cogno-anima is
+          # the #213 merge, because `run(split_context=True)` needs `mk.EGO_CONTEXT_UNTRUSTED`.
+          # Moving a pin is a deliberate edit of this file.
           pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@8f3970b8e292ca037e933b66d1ebe6abf522e0db"
           pip install -e ".[dev]"
       - name: Integration suite (real model)
