@@ -29,6 +29,8 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
     loop before any ledger row is written. That turn has no row, and the surviving
     `ctx.ego_result` is the only record of its executor prompt.
   - Nothing a turn decides changes. `tests/unit/test_the_ledger_records_the_executors_prompt.py`.
+  - **CI pin:** `.github/workflows/ci.yml` installs cogno-anima at `55788c8` (0.1.5, the release
+    that carries the record) in both install steps; the other three sibling pins do not move.
 - **`SessionRunner.run` records the layers it composed into the context** (2026-10-07), on
   `ctx.metadata["context_layers"]` (`cogno_soma.CONTEXT_LAYERS_KEY`), per turn:
   `[{"block", "chars", "carrier"}]`, in the order composed.
