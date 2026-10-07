@@ -4,6 +4,43 @@
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
 
+### Fixed
+
+- **The stage stamp ERASED the `prompt_sha` of NOUMENO and NER** (2026-10-07). `_stamp` wrote
+  `metrics.prompt_sha = prompt` unconditionally, from a keyword that defaults to `""`. NOUMENO and
+  NER author their own templates and stamp the digest of them on their own metrics
+  (`cogno_anima.prompts.prompt_digest` — the layer that authors a text owns its identity); the
+  pipeline stamps those two with no label, because the host has no slot for a text it did not
+  write, so the default overwrote the digest. Measured downstream: `stages[noumeno|ner].prompt_sha`
+  empty on 141 of 141 traces over three days — no prompt A/B and no reversal could be read off a
+  trace for those two stages.
+  - **The rule is about the class, not the field: the stamp writes a field only when the
+    orchestrator HAS a value for it.** `_stamp` writes three fields. `seq` — always; only this
+    layer knows the call order. `attempt` and `prompt_sha` — only when given. `attempt` had the
+    same shape (assigned from a default of `0`) and no victim: the EGO is the only stage that
+    sets its own, and its one call site always passes the loop's count.
+  - **Red → green** with the REAL anima stages through the real pipeline (a double has no digest
+    to lose): on the tree before, `'' == 'e8b9344aed58'`; after, each stage's `prompt_sha` equals
+    `prompt_digest` over the template it used, and two different contacts get the same label (a
+    digest of the template, not of what was rendered).
+  - **Unchanged:** the four slots the HOST labels (`scope`, `ego`, `judge`, `voice`, from
+    `mk.PROMPT_SHAS`) arrive as before. A stage with no template (the ID, the scope selector)
+    stays `""` — the type's own "nothing a deployment set". A stage that did not run has no
+    metrics row at all.
+  - **A chosen behaviour, declared: on `attempt`, the LOOP's count is what the row carries.** The
+    real EGO reads its attempt from `mk.EGO_CORRECTION`, which this loop writes, so inside the
+    loop the two are the same number on every pass. They can differ on one path only: a host that
+    seeds that metakey with an attempt other than 1 BEFORE the turn. There the executor reports
+    the host's number on `EgoResult.attempt` and the stamped row says the loop's — the axis the
+    judge ledger and every other row of the turn are on. Pinned by a test over seeds 1, 2 and 5.
+  - **No replay over stored traces:** the digest of a past turn's template is not recoverable
+    from a trace that stored `""` — the erased value is the missing one. What IS determinable
+    without re-running a turn: both stages stamp a non-empty digest on every call that returns
+    (`metrics.prompt_sha=self._prompt_sha`, unconditional in `cogno-anima`), so every one of those
+    turns would carry both.
+  `tests/unit/test_the_stamp_fills_and_never_erases.py`: the twin, the controls, each field one
+  by one, and the nine `_stamp` call sites read off the source.
+
 ### Added
 
 - **`SessionRunner.run(split_context=True)` hands the context over by provenance, on two

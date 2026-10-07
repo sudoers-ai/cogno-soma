@@ -666,17 +666,41 @@ def _judge_sha(ctx) -> str:
     return f"{base}+conv" if ctx.metadata.get(mk.JUDGE_CONVERSATIONAL) else base
 
 
-def _stamp(ctx, metrics, *, attempt: int = 0, prompt: str = "") -> None:
+def _stamp(ctx, metrics, *, attempt: Optional[int] = None,
+           prompt: Optional[str] = None) -> None:
     """Mark one executed stage with its place in the turn. Never raises: telemetry must not be
-    the reason a turn dies, and an unstamped metric degrades to the old behaviour exactly."""
+    the reason a turn dies, and an unstamped metric degrades to the old behaviour exactly.
+
+    **The stamp FILLS; a keyword left out erases nothing.** Three fields are written here and
+    they are not the same kind of thing:
+
+    * ``seq`` — always. Only this layer knows the call order, so no stage has a value to lose.
+    * ``attempt`` — only when the caller is on the correction loop's axis and passes its count
+      (the EGO and the judge). The EGO stamps its own, read from the metakey this loop writes,
+      so inside the loop the two are the same number; where a host seeded that metakey with
+      another one before the turn, the LOOP's count is what the row carries — it is the axis
+      the judge ledger and every other row of the turn are on.
+    * ``prompt_sha`` — only when the HOST labelled the slot this call ran (``mk.PROMPT_SHAS``:
+      scope, ego, judge, voice). A stage that authors its own template has stamped the digest
+      of it already, and there is no host label for a text the host did not write.
+
+    Both of the last two used to be assigned unconditionally from keyword DEFAULTS (``0`` and
+    ``""``), and the second one was a live defect: NOUMENO and NER are stamped with no label,
+    so the default overwrote the digest each of them had just written. Measured downstream,
+    ``stages[noumeno|ner].prompt_sha`` was empty on 141 of 141 traces over three days. The
+    first had the same shape and no victim — no call reached it with a stage that had set its
+    own — and is closed with the same rule rather than left for the next call site to find.
+    """
     try:
         seq = int(ctx.metadata.get(_SEQ_KEY, 0)) + 1
         ctx.metadata[_SEQ_KEY] = seq
         if metrics is None:
             return
         metrics.seq = seq
-        metrics.attempt = attempt
-        metrics.prompt_sha = prompt
+        if attempt:
+            metrics.attempt = attempt
+        if prompt:
+            metrics.prompt_sha = prompt
     except Exception:  # noqa: BLE001 — see above
         logger.debug("stage_stamp_failed", exc_info=True)
 
