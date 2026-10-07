@@ -50,6 +50,25 @@ before the current turn. Both are exported from `cogno_soma` and are the default
 whether its row is still in the window — never a copy of the numbers, and never the old private
 `_DEFAULT_BURST_GAP_SECONDS` (kept as an alias, so nothing breaks).
 
+**The context has two authors, and `run(split_context=True)` hands it over by PROVENANCE.** The
+runner composes a `[SOURCES]` instruction (this library's own text) and up to four layers other
+people wrote: `[RECENT CONVERSATION]`, `[EARLIER CONTEXT]`, `[MEMORIES]`, `[KNOWLEDGE GRAPH]`.
+- **Off (the default):** all of it in `ctx.metadata["ego_context"]`, one block, byte for byte as
+  before.
+- **On:** the instruction stays in `ego_context`, where a host still prepends its own notes. The
+  layers go to `ctx.metadata["ego_context_untrusted"]`, which `cogno-anima` renders after the
+  notes, inside a fence, as text an instruction in which is data. The two joined by a blank line
+  are the block of before: nothing is added, dropped or reordered.
+- With no layer to carry, the second key is NOT set.
+- `metadata=` is still merged last, so a host may overwrite either carrier.
+- `conversation_history` (what NOUMENO and NER read) is the same in both modes.
+
+Why a host would turn it on: in one block, a line typed inside a memory or a message in the
+instruction's own style is the same unfenced text as the instruction. No sentence separates the
+two. The composer knows who wrote what, so it is the composer that keeps them apart. It changes
+what a model reads on every turn, so switch it on a measurement
+(`cogno-anima/tests/integration/test_context_fence.py`).
+
 ## 3. Hooks — interception + atomicity
 
 `Hooks` are optional callbacks (sync or async) fired at fixed points. Use them for:
