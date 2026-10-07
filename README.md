@@ -95,6 +95,11 @@ gets the layers other people wrote: the conversation, the earlier-session summar
 the graph facts. `cogno-anima` renders that second carrier inside a fence. Off by default: one
 block, byte for byte as before (`docs/HOST_INTEGRATION.md` §2).
 
+Either way, the runner records which layers it composed on `ctx.metadata["context_layers"]`:
+slug, length and carrier per layer, never the text. The per-attempt ledger
+(`ctx.metadata["judge_attempts"]`) carries what each attempt's executor prompt held, as
+`ego_prompt_blocks`, `ego_prompt_sha` and `ego_prompt_path` (`docs/HOST_INTEGRATION.md` §2, §4.1).
+
 ## Hooks — the interception seam
 
 Memory injection, safety screens, auditing and atomicity plug in as optional

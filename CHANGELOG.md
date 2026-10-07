@@ -6,6 +6,51 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **The per-attempt ledger records what each attempt's EXECUTOR PROMPT carried** (2026-10-07;
+  needs cogno-anima ≥ 0.1.5, and the dependency floor says so). `EgoStage.process` now records
+  its own prompt on the `EgoResult`: the parts and their lengths, a digest, and the path the
+  catalogue took. This loop replaces `ctx.ego_result` on every retry, so only the surviving
+  attempt's record reached a reader. A retry's prompt is not the first attempt's: it gains
+  `correction`, and `actions_done` when the rejected attempt wrote.
+  - `judge_attempts[i]["ego_prompt_blocks"]` — `[{"block", "chars"}]`, the slugs from
+    `cogno_anima.EGO_PROMPT_BLOCKS`. At most 16 rows.
+  - `judge_attempts[i]["ego_prompt_sha"]` — anima's digest of what the attempt started from.
+  - `judge_attempts[i]["ego_prompt_path"]` — `native` or `fallback`
+    (`cogno_anima.VALID_EGO_PROMPT_PATHS`).
+  - `judge_attempts[i]["ego_prompt_blocks_dropped"]` — only when a row was left out: a slug
+    outside the alphabet, a length that is not a non-negative integer, or a row past the 16th.
+  - Written on BOTH places a row is written: a judged attempt and a pre-judged replay.
+  - Every key is ABSENT when there is nothing on record: a stand-in executor, an `EgoResult`
+    without the fields, or anima's own "not on record". Never `[]` by default.
+  - Never the prompt's text. `EgoResult.prompt_text` stays in memory; nothing here reads it.
+  - The keys are exported: `LEDGER_EGO_PROMPT_BLOCKS`, `LEDGER_EGO_PROMPT_BLOCKS_DROPPED`,
+    `LEDGER_EGO_PROMPT_SHA`, `LEDGER_EGO_PROMPT_PATH`.
+  - **The hole this does not close:** a gate-B or gate-C hold with no delivered text leaves the
+    loop before any ledger row is written. That turn has no row, and the surviving
+    `ctx.ego_result` is the only record of its executor prompt.
+  - Nothing a turn decides changes. `tests/unit/test_the_ledger_records_the_executors_prompt.py`.
+  - **CI pin:** `.github/workflows/ci.yml` installs cogno-anima at `55788c8` (0.1.5, the release
+    that carries the record) in both install steps; the other three sibling pins do not move.
+- **`SessionRunner.run` records the layers it composed into the context** (2026-10-07), on
+  `ctx.metadata["context_layers"]` (`cogno_soma.CONTEXT_LAYERS_KEY`), per turn:
+  `[{"block", "chars", "carrier"}]`, in the order composed.
+  - `block` is one of `cogno_soma.CONTEXT_LAYER_SLUGS`: `sources`, `recent_conversation`,
+    `earlier_context`, `memories`, `knowledge_graph`.
+  - `carrier` is one of `cogno_soma.CONTEXT_CARRIERS`: `context` (`ego_context`) or
+    `context_data` (`ego_context_untrusted`). Without `split_context` every layer is on the
+    first. The two names are the slugs cogno-anima gives those two parts of the executor's
+    prompt.
+  - `chars` is the layer as it sits on the carrier, label included. On each carrier,
+    `sum(chars) + 2 * (rows - 1)` is the length of what the runner put there. What a host
+    finds on that carrier beyond that is text somebody else prepended.
+  - The record is the composer's: a `[KNOWLEDGE GRAPH]` line typed inside a memory adds no row.
+  - Written after `metadata=` is merged. A carrier the host replaced through `metadata=` has no
+    layers on record, and a `context_layers` key a caller hands in is overwritten.
+  - ABSENT when the context was not composed here (`Pipeline.run_turn` driven directly). Not
+    carried to the next turn and not in `sess.state`.
+  - **The composed context did not change by a byte**: 32 configurations (transcript ×
+    earlier context × memories × graph × split) have the digest they had on `f56a09d`.
+    `tests/unit/test_the_composer_records_its_layers.py`.
 - **The per-attempt ledger records HOW the judge's verdict was read** (2026-10-07; needs
   cogno-anima ≥ 0.1.3, and the dependency floor says so). anima now reads the judge's verdict
   strictly — only a JSON boolean counts — and reports the read on `SuperegoResult.verdict_read`.

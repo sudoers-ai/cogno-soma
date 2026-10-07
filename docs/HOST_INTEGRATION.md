@@ -63,7 +63,31 @@ people wrote: `[RECENT CONVERSATION]`, `[EARLIER CONTEXT]`, `[MEMORIES]`, `[KNOW
 - `metadata=` is still merged last, so a host may overwrite either carrier.
 - `conversation_history` (what NOUMENO and NER read) is the same in both modes.
 
-Why a host would turn it on: in one block, a line typed inside a memory or a message in the
+**The runner records which layers it composed**, on `ctx.metadata["context_layers"]`
+(`cogno_soma.CONTEXT_LAYERS_KEY`), every turn:
+
+```python
+[{"block": "sources", "chars": 612, "carrier": "context"},
+ {"block": "memories", "chars": 58, "carrier": "context_data"}]
+```
+
+- `block` is one of `cogno_soma.CONTEXT_LAYER_SLUGS` (`sources`, `recent_conversation`,
+  `earlier_context`, `memories`, `knowledge_graph`). The record comes from the composer, never
+  from a label found in the text: a `[KNOWLEDGE GRAPH]` line typed inside a memory adds no row.
+- `carrier` is one of `cogno_soma.CONTEXT_CARRIERS`: `context` is `ego_context`, `context_data`
+  is `ego_context_untrusted`. With `split_context` off every layer is on `context`.
+- `chars` is the layer as it sits on the carrier, label included. No text of a layer is in the
+  record, so it is safe to persist beside a turn.
+- **The pair.** On each carrier, `sum(chars) + 2 * (rows - 1)` is the length of what the runner
+  put there. A host that prepends its own blocks can therefore measure what it cannot account
+  for: the carrier's final length, minus what the runner declared, minus the host's own blocks
+  and their blank lines. Anything left over entered some other way.
+- The record is written after `metadata=` is merged. A carrier you replace through `metadata=`
+  has no layers on record. A `context_layers` key you hand in is overwritten.
+- Absent when you drive `Pipeline.run_turn` with a context of your own. It is per turn: not
+  carried forward, not in `sess.state`.
+
+Why a host would turn `split_context` on: in one block, a line typed inside a memory or a message in the
 instruction's own style is the same unfenced text as the instruction. No sentence separates the
 two. The composer knows who wrote what, so it is the composer that keeps them apart. It changes
 what a model reads on every turn, so switch it on a measurement
@@ -120,6 +144,10 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
 | `verdict_read` | HOW this attempt's deciding verdict was read — a value of `cogno_anima.VALID_VERDICT_READS` (`boolean` = `approved` is what the judge said; anything else is the fail-closed fallback). The key is `cogno_soma.LEDGER_VERDICT_READ`. Absent when the judge reported no read (a stand-in stage) and on a `skipped` row | `_attempt_read` |
 | `fast_verdict_read` | present ONLY when a fast judge ran first and the attempt escalated past it: the read of THAT verdict (`cogno_soma.LEDGER_FAST_VERDICT_READ`). When the fast judge approved, its read is `verdict_read` | `_attempt_read` |
+| `ego_prompt_blocks` | which PARTS this attempt's executor prompt carried and how long each was: `[{"block", "chars"}]`, slugs from `cogno_anima.EGO_PROMPT_BLOCKS`, at most 16 rows (`cogno_soma.LEDGER_EGO_PROMPT_BLOCKS`). Absent when nothing is on record | `_attempt_prompt` |
+| `ego_prompt_blocks_dropped` | how many rows were left out (a slug outside the alphabet, a bad length, past the 16th) — present only when some were | `_attempt_prompt` |
+| `ego_prompt_sha` | anima's digest of what this attempt started from: system prompt, task, native tool schemas (`cogno_soma.LEDGER_EGO_PROMPT_SHA`). Absent when not on record | `_attempt_prompt` |
+| `ego_prompt_path` | `native` or `fallback`, from `cogno_anima.VALID_EGO_PROMPT_PATHS` (`cogno_soma.LEDGER_EGO_PROMPT_PATH`). Absent when not on record | `_attempt_prompt` |
 | `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed`, `read_owed` or `held_message_rejected` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
 | `skipped` | the judge did NOT read this attempt, and why: `prejudged_replay` (`cogno_soma.JUDGE_SKIPS`) — the «sim» that replayed a held message the judge had already approved (§4.2); absent when the judge read it | the loop |
 
@@ -127,8 +155,26 @@ The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surf
 `test_each_attempt_records_the_draft_the_judge_ACTUALLY_read`,
 `test_the_offered_cap_is_reported_on_BOTH_paths`),
 `test_the_ledger_records_the_judges_branch.py`, for `extra_pass`, `test_one_turn_to_read.py`,
-for `skipped`, `test_a_prejudged_replay_is_not_judged_again.py`, and, for the two read keys,
-`test_the_ledger_records_how_the_verdict_was_read.py`.
+for `skipped`, `test_a_prejudged_replay_is_not_judged_again.py`, for the two read keys,
+`test_the_ledger_records_how_the_verdict_was_read.py`, and, for the four `ego_prompt_*` keys,
+`test_the_ledger_records_the_executors_prompt.py`.
+
+**What the executor's prompt carried (`ego_prompt_blocks`, `ego_prompt_sha`, `ego_prompt_path`).**
+cogno-anima 0.1.5 records the executor's prompt on the `EgoResult`, once per `process` call. This
+loop replaces `ctx.ego_result` on every retry, so the ledger copies the record per attempt,
+before the next one runs.
+- The retry's prompt differs from the first attempt's: it gains `correction`, and `actions_done`
+  when the rejected attempt wrote. Two rows of one turn diff as lists.
+- Only slugs, lengths, a digest and a path are copied. The prompt's text
+  (`EgoResult.prompt_text`) stays in memory; do not persist it.
+- The keys are ABSENT rather than defaulted. "Not on record" (a stand-in executor, an older
+  anima) and "a prompt with no parts" are different answers, and no built prompt is the second.
+- The lengths add up: `sum(chars) + 2 * (rows - 1)` is the length of that attempt's system
+  prompt, unless `ego_prompt_blocks_dropped` says a row is missing.
+- `ego_prompt_sha` is a per-attempt label (the contact's words are inside the digested text).
+  It is not `StageMetrics.prompt_sha`, which names the templates.
+- **One turn has no row at all:** a gate-B or gate-C hold with no delivered text leaves the loop
+  before a ledger row is written (§4.2). For that turn, read the record off `ctx.ego_result`.
 
 **How a verdict was READ (`verdict_read`, `fast_verdict_read`).** cogno-anima 0.1.3 reads the
 judge's verdict strictly — only a JSON boolean counts — and a reply it cannot read is a rejection
