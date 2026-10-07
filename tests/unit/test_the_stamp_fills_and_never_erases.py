@@ -229,15 +229,26 @@ def test_field_prompt_sha_takes_the_hosts_label_when_there_is_one():
     assert row.prompt_sha == "9f3c1a"
 
 
-def test_field_attempt_is_not_erased_by_an_absent_or_zero_attempt():
+def test_field_attempt_is_not_erased_when_the_keyword_is_left_out():
     """The SAME shape as the defect, one field over: ``attempt`` was written from a default of
     ``0``. No call site reached it with a stage that had set its own (the EGO, the only stage
     that does, is always stamped with the loop's count) — so nothing was being lost. The rule
     is closed anyway: a call that has no attempt to give leaves the stage's own."""
-    for kwargs in ({}, {"attempt": None}, {"attempt": 0}):
+    for kwargs in ({}, {"attempt": None}):
         ctx, row = _stamped()
         pipeline_module._stamp(ctx, row, **kwargs)
         assert row.attempt == 2, kwargs
+
+
+def test_twin_an_attempt_that_was_PASSED_is_written_even_when_it_is_zero():
+    """"Given" means given, not truthy. A caller that passes ``attempt=0`` is stating a count,
+    and it is written over what the stage carried — the keyword left out is the only thing
+    that writes nothing. Tested on truthiness (``if attempt:``) an explicit ``0`` would be
+    dropped in silence, and the docstring's "only when given" would be false for one value."""
+    ctx, row = _stamped()
+    assert row.attempt == 2, "the premise: the stage carried its own"
+    pipeline_module._stamp(ctx, row, attempt=0)
+    assert row.attempt == 0
 
 
 def test_field_attempt_takes_the_loops_count_when_there_is_one():

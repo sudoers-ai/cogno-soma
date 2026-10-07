@@ -42,7 +42,9 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
   trace for those two stages.
   - **The rule is about the class, not the field: the stamp writes a field only when the
     orchestrator HAS a value for it.** `_stamp` writes three fields. `seq` — always; only this
-    layer knows the call order. `attempt` and `prompt_sha` — only when given. `attempt` had the
+    layer knows the call order. `attempt` — only when the caller passes one (`None`, the keyword
+    left out, writes nothing; any value passed is written, an explicit `0` included).
+    `prompt_sha` — only when the host labelled the slot (an empty label erases nothing). `attempt` had the
     same shape (assigned from a default of `0`) and no victim: the EGO is the only stage that
     sets its own, and its one call site always passes the loop's count.
   - **Red → green** with the REAL anima stages through the real pipeline (a double has no digest

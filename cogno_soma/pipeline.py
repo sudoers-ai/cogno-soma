@@ -676,8 +676,10 @@ def _stamp(ctx, metrics, *, attempt: Optional[int] = None,
     they are not the same kind of thing:
 
     * ``seq`` — always. Only this layer knows the call order, so no stage has a value to lose.
-    * ``attempt`` — only when the caller is on the correction loop's axis and passes its count
-      (the EGO and the judge). The EGO stamps its own, read from the metakey this loop writes,
+    * ``attempt`` — only when the caller is on the correction loop's axis and PASSES its count
+      (the EGO and the judge). "Passes" is literal: ``None`` — the keyword left out — writes
+      nothing, and any value that was passed is written, an explicit ``0`` included. Whether a
+      value was given is not a question about its truthiness. The EGO stamps its own, read from the metakey this loop writes,
       so inside the loop the two are the same number; where a host seeded that metakey with
       another one before the turn, the LOOP's count is what the row carries — it is the axis
       the judge ledger and every other row of the turn are on.
@@ -698,7 +700,7 @@ def _stamp(ctx, metrics, *, attempt: Optional[int] = None,
         if metrics is None:
             return
         metrics.seq = seq
-        if attempt:
+        if attempt is not None:
             metrics.attempt = attempt
         if prompt:
             metrics.prompt_sha = prompt
