@@ -52,7 +52,7 @@ jobs:
           # homeo, synapse and engram are the SHAs cogno-host's own ci.yml pins; cogno-anima is
           # the #213 merge, because `run(split_context=True)` needs `mk.EGO_CONTEXT_UNTRUSTED`.
           # Moving a pin is a deliberate edit of this file.
-          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@8f3970b8e292ca037e933b66d1ebe6abf522e0db"
+          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@1923c85000e45198ebf46d95a0366434e43ae251"
           pip install -e ".[dev]"
       - name: Lint (ruff)
         run: ruff check cogno_soma tests examples
@@ -101,7 +101,7 @@ jobs:
           # homeo, synapse and engram are the SHAs cogno-host's own ci.yml pins; cogno-anima is
           # the #213 merge, because `run(split_context=True)` needs `mk.EGO_CONTEXT_UNTRUSTED`.
           # Moving a pin is a deliberate edit of this file.
-          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@8f3970b8e292ca037e933b66d1ebe6abf522e0db"
+          pip install "cogno-anima @ git+https://github.com/sudoers-ai/cogno-anima.git@1923c85000e45198ebf46d95a0366434e43ae251"
           pip install -e ".[dev]"
       - name: Integration suite (real model)
         env:

@@ -1294,9 +1294,14 @@ async def test_no_host_map_means_UNLABELLED_not_broken(stub_embedder, stub_backe
 
 async def test_a_stage_with_no_host_supplied_prompt_has_an_EMPTY_sha(
         stub_embedder, stub_backend):
-    """NOUMENO/NER render their own templates and the ID calls no model, so nothing a
-    deployment sets reaches them this turn. An empty sha says "nothing a deployment set" —
-    which is a different claim from "not recorded", and `seq` proves it was recorded."""
+    """The HOST labels only the slots it authors, so no host label reaches NOUMENO, NER or
+    the ID — and these DOUBLES author nothing of their own, so their sha stays empty: "nothing
+    a deployment set", a different claim from "not recorded" (`seq` proves it was recorded).
+
+    This is NOT a statement about the real stages. The real NOUMENO and NER author their own
+    templates and stamp the digest of them, and the stamp must leave it there — it used to
+    erase it, and this test, run on doubles, could not see that. The real-stage half is
+    `test_the_stamp_fills_and_never_erases.py`."""
     pipe = Pipeline(embedder=stub_embedder, noumeno=FakeNoumeno(), ner=FakeNER(),
                     id_stage=FakeID(route="SUPEREGO"), ego=FakeEgo(), superego=FakeSuperego())
     cfg = TurnConfig(gen_backend=stub_backend, ego_backend=stub_backend, ego_prompt="x",

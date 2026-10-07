@@ -118,14 +118,34 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `tools_dropped`, `tools_offered_dropped` | how many past `_TOOLS_PER_ATTEMPT` were left out — present only when some were | `_attempt_tools` |
 | `tools_error` | the display list could not be built (the exception's TYPE); `committed` and `tools_offered` survive it | `_attempt_tools` |
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
+| `verdict_read` | HOW this attempt's deciding verdict was read — a value of `cogno_anima.VALID_VERDICT_READS` (`boolean` = `approved` is what the judge said; anything else is the fail-closed fallback). The key is `cogno_soma.LEDGER_VERDICT_READ`. Absent when the judge reported no read (a stand-in stage) and on a `skipped` row | `_attempt_read` |
+| `fast_verdict_read` | present ONLY when a fast judge ran first and the attempt escalated past it: the read of THAT verdict (`cogno_soma.LEDGER_FAST_VERDICT_READ`). When the fast judge approved, its read is `verdict_read` | `_attempt_read` |
 | `extra_pass` | which exception bought ONE more EGO pass with THIS rejection: `action_owed`, `read_owed` or `held_message_rejected` (`cogno_soma.EXTRA_PASSES`); absent when none did (§4.3) | the loop |
 | `skipped` | the judge did NOT read this attempt, and why: `prejudged_replay` (`cogno_soma.JUDGE_SKIPS`) — the «sim» that replayed a held message the judge had already approved (§4.2); absent when the judge read it | the loop |
 
 The tests that pin them: `test_pipeline.py` (`test_each_attempt_records_the_surface_it_was_OFFERED`,
 `test_each_attempt_records_the_draft_the_judge_ACTUALLY_read`,
 `test_the_offered_cap_is_reported_on_BOTH_paths`),
-`test_the_ledger_records_the_judges_branch.py`, for `extra_pass`, `test_one_turn_to_read.py`, and,
-for `skipped`, `test_a_prejudged_replay_is_not_judged_again.py`.
+`test_the_ledger_records_the_judges_branch.py`, for `extra_pass`, `test_one_turn_to_read.py`,
+for `skipped`, `test_a_prejudged_replay_is_not_judged_again.py`, and, for the two read keys,
+`test_the_ledger_records_how_the_verdict_was_read.py`.
+
+**How a verdict was READ (`verdict_read`, `fast_verdict_read`).** cogno-anima 0.1.3 reads the
+judge's verdict strictly — only a JSON boolean counts — and a reply it cannot read is a rejection
+(fail-closed) with a fixed critique. To this loop that is a rejection like any other: it spends
+the same budget. The ledger says which kind it was, per attempt, with the VALUE of anima's closed
+alphabet and nothing of the model's reply. `boolean` is the only value under which `approved` is
+something the judge said. With a two-tier judge, a fast verdict that could not be read escalates
+to the strong judge — the right repair — and `fast_verdict_read` is what keeps the record that
+the FAST model did not answer in a boolean; it is written on every escalation (`boolean` too, when
+the fast judge properly said no and was overruled), so the rate has its denominator. Both keys are
+ABSENT rather than defaulted: "not on record" and `boolean` are different answers. A host
+persisting the ledger reads the keys from `cogno_soma` and the values from `cogno_anima`.
+
+The guard's read is not in this ledger — it is anima's own per-turn metakey
+(`ctx.metadata["scope_verdict_read"]`). This loop only guarantees its ABSENCE on a turn that
+never calls the guard (no scope prompt, or the PII gate ended the turn first): the key is cleared
+before those exits, so a value a carrier left there is never read as this turn's.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the

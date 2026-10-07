@@ -6,6 +6,83 @@ Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git his
 
 ### Added
 
+- **The per-attempt ledger records HOW the judge's verdict was read** (2026-10-07; needs
+  cogno-anima ≥ 0.1.3, and the dependency floor says so). anima now reads the judge's verdict
+  strictly — only a JSON boolean counts — and reports the read on `SuperegoResult.verdict_read`.
+  This loop kept the result and dropped that field, so a rejection the judge GAVE and a rejection
+  anima fell back to (a verdict in a string, a duplicated key, no JSON) were the same ledger row,
+  and the rate of non-boolean verdicts per model could not be counted from anything a host
+  persists.
+  - `judge_attempts[i]["verdict_read"]` — the read of the verdict that DECIDED the attempt, a
+    value of `cogno_anima.VALID_VERDICT_READS`. Only the value; never a byte of the reply.
+  - `judge_attempts[i]["fast_verdict_read"]` — only when a fast judge ran first and the attempt
+    escalated past it. A fast verdict that cannot be read is a fast rejection, so it escalates:
+    the right repair, which without this key would erase the only record of it.
+  - Both keys ABSENT when there is nothing to say: a stand-in judge that reports no read, a
+    `skipped` row (no judge was called), a label outside the alphabet.
+  - The keys are exported — `cogno_soma.LEDGER_VERDICT_READ`, `LEDGER_FAST_VERDICT_READ` — so a
+    host persisting the ledger reads them from here and the values from anima.
+  - **The guard's read** (`ctx.metadata["scope_verdict_read"]`, anima's) is cleared before the two
+    exits that never call the guard (no scope prompt; the PII gate), so ABSENT means "no verdict
+    was asked this turn" on those turns too.
+  - Nothing a turn DECIDES changes: `_judge` returns the same verdict (and, beside it, the fast
+    read). `tests/unit/test_the_ledger_records_how_the_verdict_was_read.py`.
+  - **CI pin:** `.github/workflows/ci.yml` installs cogno-anima at `1923c85` (0.1.3, the release
+    that carries `verdict_read`) in both install steps; the other three sibling pins do not move.
+
+### Fixed
+
+- **The stage stamp ERASED the `prompt_sha` of NOUMENO and NER** (2026-10-07). `_stamp` wrote
+  `metrics.prompt_sha = prompt` unconditionally, from a keyword that defaults to `""`. NOUMENO and
+  NER author their own templates and stamp the digest of them on their own metrics
+  (`cogno_anima.prompts.prompt_digest` — the layer that authors a text owns its identity); the
+  pipeline stamps those two with no label, because the host has no slot for a text it did not
+  write, so the default overwrote the digest. Measured downstream: `stages[noumeno|ner].prompt_sha`
+  empty on 141 of 141 traces over three days — no prompt A/B and no reversal could be read off a
+  trace for those two stages.
+  - **The rule is about the class, not the field: the stamp writes a field only when the
+    orchestrator HAS a value for it.** `_stamp` writes three fields. `seq` — always; only this
+    layer knows the call order. `attempt` — only when the caller passes one (`None`, the keyword
+    left out, writes nothing; any value passed is written, an explicit `0` included).
+    `prompt_sha` — only when the host labelled the slot (an empty label erases nothing). `attempt` had the
+    same shape (assigned from a default of `0`) and no victim: the EGO is the only stage that
+    sets its own, and its one call site always passes the loop's count.
+  - **Red → green** with the REAL anima stages through the real pipeline (a double has no digest
+    to lose): on the tree before, `'' == 'e8b9344aed58'`; after, each stage's `prompt_sha` equals
+    `prompt_digest` over the template it used, and two different contacts get the same label (a
+    digest of the template, not of what was rendered).
+  - **Unchanged:** the four slots the HOST labels (`scope`, `ego`, `judge`, `voice`, from
+    `mk.PROMPT_SHAS`) arrive as before. A stage with no template (the ID, the scope selector)
+    stays `""` — the type's own "nothing a deployment set". A stage that did not run has no
+    metrics row at all.
+  - **A chosen behaviour, declared: on `attempt`, the LOOP's count is what the row carries.** The
+    real EGO reads its attempt from `mk.EGO_CORRECTION`, which this loop writes, so inside the
+    loop the two are the same number on every pass. They can differ on one path only: a host that
+    seeds that metakey with an attempt other than 1 BEFORE the turn. There the executor reports
+    the host's number on `EgoResult.attempt` and the stamped row says the loop's — the axis the
+    judge ledger and every other row of the turn are on. Pinned by a test over seeds 1, 2 and 5.
+  - **Replay, with its ruler.** The erased digest is not recoverable from a trace that stored
+    `""` — the erased value is the missing one. What IS determinable without re-running a turn
+    is on how many of those rows the stage actually RAN: anima stamps the digest on every call
+    that returns, so each of those carries one after this fix. Counted on a downstream host's
+    exported stage rows (the traces of three days that hold at least one `noumeno` row): **141
+    of 141 `noumeno` rows and 141 of 141 `ner` rows — in 117 traces, 19 of them with more than
+    one pass — ran the stage** (a model answered, input tokens above zero) with an empty
+    `prompt_sha`, **and would carry it. 0 rows are a seated result.** The unit is the stage
+    ROW, not the trace. The other shape — a turn whose perception the host SEATED
+    (`TurnConfig.noumeno_result` / `intent_result`, no model call), which keeps `""` because no
+    template ran — does not occur in that window: it is proven by the test, not by the corpus.
+    The same export confirms the controls: the ID's row is empty on 141 of 141 (by design),
+    and the executor, the judge and the scope guard carry the host's label.
+  - **Not fixed here, declared:** the pre-judge (`judge_pre`) rows carry no digest either, for
+    a different reason — `cogno_anima.stages.ProposalJudge` never stamps one on its metrics,
+    and those rows do not pass through this stamp at all (a host files them). That is a change
+    in cogno-anima, queued.
+  `tests/unit/test_the_stamp_fills_and_never_erases.py`: the twin, the controls, each field one
+  by one, and the nine `_stamp` call sites read off the source.
+
+### Added
+
 - **`SessionRunner.run(split_context=True)` hands the context over by provenance, on two
   carriers** (2026-10-07). The context the runner composes has two authors: the `[SOURCES]`
   instruction is this library's, and the conversation, the earlier-session summary, the memories
