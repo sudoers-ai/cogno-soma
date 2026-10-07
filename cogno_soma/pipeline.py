@@ -28,6 +28,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from cogno_anima import EGO_PROMPT_BLOCKS, VALID_EGO_PROMPT_PATHS
 from cogno_anima import metakeys as mk
 from cogno_anima.types import (committed_this_turn, held_delivered_texts,
                                source_reads_not_called, wrote_for_the_contact)
@@ -899,6 +900,73 @@ def _attempt_read(judge, fast_read: str = "") -> dict:
     return out
 
 
+# ── WHAT the executor's prompt carried, per attempt ───────────────────────────────────────
+#
+# `EgoStage.process` (cogno-anima 0.1.5) records its own prompt on the `EgoResult`: which PARTS
+# it carried and how long each was (`prompt_blocks`, slugs from the closed
+# `cogno_anima.EGO_PROMPT_BLOCKS`), a digest of what the attempt started from (`prompt_sha`) and
+# the path the catalogue took (`prompt_path`). The record is per `process` call — and this loop
+# REPLACES `ctx.ego_result` on every retry, so only the surviving attempt's reached a reader.
+# A retry's prompt is not the first attempt's (it gains `correction`, and `actions_done` when
+# the rejected attempt wrote), which is exactly the difference a reader of a rejected turn asks
+# about. Same shape as `tools_offered` and the draft before it: the fact is per attempt, so the
+# ledger is where it has to be copied, before the next attempt runs.
+#
+# Never the prompt's TEXT: `EgoResult.prompt_text` is in memory only and nothing here reads it.
+#
+# **The hole this does not close.** A gate-B or gate-C hold with no delivered text leaves the
+# loop BEFORE any ledger row is written (the `break` in `_run_ego_loop`): that turn has no row,
+# so the only record of its executor prompt is the surviving `ctx.ego_result` itself.
+#
+# The KEYS are exported; the VALUES are closed by anima's two alphabets.
+LEDGER_EGO_PROMPT_BLOCKS = "ego_prompt_blocks"
+LEDGER_EGO_PROMPT_BLOCKS_DROPPED = "ego_prompt_blocks_dropped"
+LEDGER_EGO_PROMPT_SHA = "ego_prompt_sha"
+LEDGER_EGO_PROMPT_PATH = "ego_prompt_path"
+
+# Rows per attempt. The executor's prompt has eight parts and renders each at most once; twice
+# that is room for a future part and still a bound on what rides in persisted metadata.
+_PROMPT_BLOCKS_PER_ATTEMPT = 16
+_PROMPT_SHA_RE = re.compile(r"[0-9a-f]{8,64}")
+
+
+def _attempt_prompt(ego_result) -> dict:
+    """The ledger fields for what this attempt's executor prompt carried.
+
+    Every key is ABSENT when there is nothing on record, and never defaulted: an `EgoResult`
+    without the fields (a cogno-anima that predates them), a stand-in executor that builds its
+    own result, or anima's own "not on record" (an empty inventory, a `None` digest, a blank
+    path). ``[]`` would read as "a prompt with no parts", which no built prompt is.
+
+    A row is written only when its slug is in ``EGO_PROMPT_BLOCKS`` and its length is a
+    non-negative integer; anything else is dropped and COUNTED
+    (``ego_prompt_blocks_dropped``), because a reader adding the lengths up has to know the
+    list is short. The ledger rides in metadata a host persists, so nothing from outside the
+    closed alphabets is ever copied into it.
+
+    Never raises: telemetry must not be the reason a turn dies in the correction loop."""
+    out: dict = {}
+    try:
+        raw = getattr(ego_result, "prompt_blocks", None)
+        if isinstance(raw, (list, tuple)) and raw:
+            rows = [{"block": row["block"], "chars": row["chars"]} for row in raw
+                    if isinstance(row, dict) and row.get("block") in EGO_PROMPT_BLOCKS
+                    and type(row.get("chars")) is int and row["chars"] >= 0]
+            kept = rows[:_PROMPT_BLOCKS_PER_ATTEMPT]
+            out[LEDGER_EGO_PROMPT_BLOCKS] = kept
+            if len(raw) - len(kept):
+                out[LEDGER_EGO_PROMPT_BLOCKS_DROPPED] = len(raw) - len(kept)
+        sha = getattr(ego_result, "prompt_sha", None)
+        if isinstance(sha, str) and _PROMPT_SHA_RE.fullmatch(sha):
+            out[LEDGER_EGO_PROMPT_SHA] = sha
+        path = getattr(ego_result, "prompt_path", None)
+        if isinstance(path, str) and path in VALID_EGO_PROMPT_PATHS:
+            out[LEDGER_EGO_PROMPT_PATH] = path
+    except Exception:  # noqa: BLE001 — degraded telemetry, never a dead turn
+        logger.debug("attempt_prompt_failed", exc_info=True)
+    return out
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -1277,6 +1345,7 @@ class Pipeline:
                 ledger.append({"attempt": attempt, "approved": True, "critique": "",
                                **_attempt_draft(ctx.ego_result),
                                **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
+                               **_attempt_prompt(ctx.ego_result),
                                "skipped": JUDGE_SKIP_PREJUDGED_REPLAY})
                 logger.debug("judge_skipped reason=%s", JUDGE_SKIP_PREJUDGED_REPLAY)
                 break
@@ -1313,6 +1382,7 @@ class Pipeline:
                 "critique": (judge.critique or "")[:_CRITIQUE_CHARS],
                 **_attempt_draft(ctx.ego_result),
                 **_attempt_tools(ctx.ego_result, cfg.tool_result_limit),
+                **_attempt_prompt(ctx.ego_result),
                 **_attempt_branch(judge),
                 **_attempt_read(judge, fast_read),
             }

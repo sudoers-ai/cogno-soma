@@ -15,9 +15,13 @@ from cogno_soma.opening import (OPENING_INTENT, OPENING_MODEL, opening_intent,
                                 opening_noumeno, opening_perception)
 from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_HELD_MESSAGE, EXTRA_PASS_READ,
                                  EXTRA_PASSES, JUDGE_SKIP_PREJUDGED_REPLAY, JUDGE_SKIPS,
+                                 LEDGER_EGO_PROMPT_BLOCKS, LEDGER_EGO_PROMPT_BLOCKS_DROPPED,
+                                 LEDGER_EGO_PROMPT_PATH, LEDGER_EGO_PROMPT_SHA,
                                  LEDGER_FAST_VERDICT_READ, LEDGER_VERDICT_READ,
                                  PREJUDGED_TEXT_SHA, Pipeline, STOP_JUDGE_EXHAUSTED, prejudged_digest)
-from cogno_soma.session import (CONTEXT_WINDOW_EXCHANGES, CONTEXT_WINDOW_GAP_SECONDS,
+from cogno_soma.session import (CARRIER_CONTEXT, CARRIER_CONTEXT_DATA, CONTEXT_CARRIERS,
+                                CONTEXT_LAYER_SLUGS, CONTEXT_LAYERS_KEY,
+                                CONTEXT_WINDOW_EXCHANGES, CONTEXT_WINDOW_GAP_SECONDS,
                                 SessionRunner)
 from cogno_soma.stages import EgoStageProtocol, IDStageProtocol, SuperegoStageProtocol
 from cogno_soma.trace_cuts import (CUT_MARK, CUT_MARK_RE, TOOL_RESULT_CHARS,
@@ -59,6 +63,22 @@ __all__ = [
     # `cogno_anima.VALID_VERDICT_READS`; a host persisting the ledger reads the keys from here.
     "LEDGER_VERDICT_READ",
     "LEDGER_FAST_VERDICT_READ",
+    # The ledger keys for what each attempt's EXECUTOR PROMPT carried
+    # (`judge_attempts[i]["ego_prompt_blocks"]`, `["ego_prompt_sha"]`, `["ego_prompt_path"]`).
+    # The values are closed by `cogno_anima.EGO_PROMPT_BLOCKS` / `VALID_EGO_PROMPT_PATHS`; a
+    # key is ABSENT when the attempt has nothing on record.
+    "LEDGER_EGO_PROMPT_BLOCKS",
+    "LEDGER_EGO_PROMPT_BLOCKS_DROPPED",
+    "LEDGER_EGO_PROMPT_SHA",
+    "LEDGER_EGO_PROMPT_PATH",
+    # The layers `SessionRunner.run` composed into the turn's context, recorded by the
+    # composer on `ctx.metadata[CONTEXT_LAYERS_KEY]` (per turn): slugs from
+    # `CONTEXT_LAYER_SLUGS`, lengths, and which of `CONTEXT_CARRIERS` each travelled on.
+    "CONTEXT_LAYERS_KEY",
+    "CONTEXT_LAYER_SLUGS",
+    "CONTEXT_CARRIERS",
+    "CARRIER_CONTEXT",
+    "CARRIER_CONTEXT_DATA",
     "PREJUDGED_TEXT_SHA",
     "prejudged_digest",
     "SomaError",

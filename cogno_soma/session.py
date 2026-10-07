@@ -102,6 +102,57 @@ CONTEXT_WINDOW_EXCHANGES: int = 6
 # The old private spelling, kept as an alias so nothing that imported it breaks. Same object.
 _DEFAULT_BURST_GAP_SECONDS = CONTEXT_WINDOW_GAP_SECONDS
 
+# ── the LAYERS this runner composes, and the record it leaves of them ────────────────────────
+#
+# The turn's context reaches the executor's prompt with no header of its own (cogno-anima's
+# inventory files it as one part, `context`, or two with the fenced half, `context_data`), and
+# what is INSIDE it is decided here: five layers, each optional but the first. Which of them a
+# turn carried could only be read off the rendered text, by their labels — and a label is text
+# anybody can type: a memory holding a line `[KNOWLEDGE GRAPH]` reads as that layer.
+#
+# So the CONSTRUCTOR records them. `SessionRunner.run` builds each layer as `(slug, text)`, joins
+# the texts into the context (the bytes of before) and writes the slugs and lengths to
+# `ctx.metadata[CONTEXT_LAYERS_KEY]`: one list, two readers. Label → slug, CLOSED — the record
+# is drawn from the slugs, never from the layer's text, so it is safe to persist beside a turn.
+CONTEXT_LAYERS: "tuple[tuple[str, str], ...]" = (
+    ("[SOURCES]", "sources"),
+    ("[RECENT CONVERSATION]", "recent_conversation"),
+    ("[EARLIER CONTEXT]", "earlier_context"),
+    ("[MEMORIES]", "memories"),
+    ("[KNOWLEDGE GRAPH]", "knowledge_graph"),
+)
+#: The closed alphabet a layer row's ``block`` is drawn from.
+CONTEXT_LAYER_SLUGS: "tuple[str, ...]" = tuple(slug for _label, slug in CONTEXT_LAYERS)
+_LABEL = {slug: label for label, slug in CONTEXT_LAYERS}
+
+#: Which carrier a layer travelled on — named as cogno-anima names the part of the executor's
+#: prompt that carrier becomes (`cogno_anima.EGO_PROMPT_BLOCKS`): ``context`` is
+#: ``mk.EGO_CONTEXT``, ``context_data`` is ``mk.EGO_CONTEXT_UNTRUSTED``. Without
+#: ``split_context`` every layer is on the first.
+CARRIER_CONTEXT = "context"
+CARRIER_CONTEXT_DATA = "context_data"
+CONTEXT_CARRIERS: "tuple[str, ...]" = (CARRIER_CONTEXT, CARRIER_CONTEXT_DATA)
+
+#: ``ctx.metadata`` key, PER TURN: ``[{"block": slug, "chars": n, "carrier": c}, …]`` in the
+#: order composed. ``chars`` is the layer as it sits in the carrier, label included, so on each
+#: carrier ``sum(chars) + 2 * (rows - 1)`` is the length of what this runner put there — and
+#: whatever a host later finds on that carrier beyond that (plus its own blank line) is text
+#: somebody else prepended. ABSENT means the context was not composed here (a host driving
+#: ``Pipeline.run_turn`` with its own). Written AFTER the host's ``metadata`` is merged, and
+#: without the rows of a carrier that merge replaced: the record describes what is on the
+#: context, not what this runner would have put there.
+CONTEXT_LAYERS_KEY = "context_layers"
+
+_LAYER_SEPARATOR = "\n\n"
+
+
+def _layer(slug: str, body: str) -> "tuple[str, str]":
+    return slug, f"{_LABEL[slug]}\n{body}"
+
+
+def _layer_rows(layers: "list[tuple[str, str]]", carrier: str) -> "list[dict]":
+    return [{"block": slug, "chars": len(text), "carrier": carrier} for slug, text in layers]
+
 
 class SessionRunner:
     """Drive a multi-turn session, threading ``id_state`` + history + NER carry-over.
@@ -208,33 +259,49 @@ class SessionRunner:
         # Two lists, because the layers have two AUTHORS. `notes` is this library's own text;
         # `data` is what other people wrote — the contact's words, a model's summary of them,
         # facts extracted from them. Joined in that order they are the single block of before.
-        notes: list[str] = [f"[SOURCES]\n{instruction}"]
-        data: list[str] = []
+        # Each entry is `(slug, text)`: the texts are the context, the slugs and lengths are its
+        # record (`CONTEXT_LAYERS_KEY`), so the record cannot describe another context.
+        notes: "list[tuple[str, str]]" = [_layer("sources", instruction)]
+        data: "list[tuple[str, str]]" = []
         if transcript:
-            data.append("[RECENT CONVERSATION]\n" + transcript)
+            data.append(_layer("recent_conversation", transcript))
             # The perception stages (NOUMENO/NER) read this to resolve a bare follow-up
             # ("com o Heitor Lacerda") against the assistant's last question instead of
             # classifying it UNKNOWN and scope-blocking — same burst-scoped view.
             ctx.metadata[mk.CONVERSATION_HISTORY] = transcript
         if prior_summary:
-            data.append("[EARLIER CONTEXT]\n" + prior_summary)
+            data.append(_layer("earlier_context", prior_summary))
         if memories:
-            data.append("[MEMORIES]\n" + "\n".join(memories))
+            data.append(_layer("memories", "\n".join(memories)))
         if graph_context:
-            data.append("[KNOWLEDGE GRAPH]\n" + graph_context)
+            data.append(_layer("knowledge_graph", graph_context))
         # Always set EGO_CONTEXT (the SOURCES instruction alone is worth carrying) so the host's
         # own stamps (which prepend to EGO_CONTEXT) still land on a purely-social first turn.
         if split_context:
             # By PROVENANCE: the instruction stays where a host's notes go, and everything a
             # third party wrote travels apart, to be rendered inside a fence. A `[SOURCES]`
             # typed inside a memory is then inside that fence, whatever it looks like.
-            ctx.metadata[mk.EGO_CONTEXT] = "\n\n".join(notes)
+            ctx.metadata[mk.EGO_CONTEXT] = _LAYER_SEPARATOR.join(text for _slug, text in notes)
             if data:
-                ctx.metadata[mk.EGO_CONTEXT_UNTRUSTED] = "\n\n".join(data)
+                ctx.metadata[mk.EGO_CONTEXT_UNTRUSTED] = _LAYER_SEPARATOR.join(
+                    text for _slug, text in data)
+            layers = (_layer_rows(notes, CARRIER_CONTEXT)
+                      + _layer_rows(data, CARRIER_CONTEXT_DATA))
         else:
-            ctx.metadata[mk.EGO_CONTEXT] = "\n\n".join(notes + data)
+            ctx.metadata[mk.EGO_CONTEXT] = _LAYER_SEPARATOR.join(
+                text for _slug, text in notes + data)
+            layers = _layer_rows(notes + data, CARRIER_CONTEXT)
         if metadata:
             ctx.metadata.update(metadata)
+            # A host that hands in a carrier of its own REPLACED what was composed above, so the
+            # layers that were on it are not on the context any more and must not be on record.
+            replaced = {carrier for carrier, key in ((CARRIER_CONTEXT, mk.EGO_CONTEXT),
+                                                     (CARRIER_CONTEXT_DATA,
+                                                      mk.EGO_CONTEXT_UNTRUSTED))
+                        if key in metadata}
+            layers = [row for row in layers if row["carrier"] not in replaced]
+        # After the merge, so this record is the runner's and never a key a caller passed in.
+        ctx.metadata[CONTEXT_LAYERS_KEY] = layers
 
         disp = self._resolve_dispatcher(dispatcher)
         ctx = await self._pipeline.run_turn(ctx, self._config, dispatcher=disp)
