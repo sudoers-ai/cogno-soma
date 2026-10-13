@@ -11,6 +11,14 @@ would be read as this turn's: a digest and an inventory of a prompt that was nev
 The third key was cleared before those exits already. This file is the same rule for the other
 two, and one derivation so a fourth key cannot join the guard unseen.
 
+**A third exit never calls the guard either: a hook that stops the turn BEFORE the gates**
+(``before_turn``, ``after_noumeno``, ``after_ner``, ``after_id``). The clearing sat after the ID,
+so such a turn left with whatever it arrived with. It is now ONE function
+(``pipeline._clear_the_guards_record``) called twice: at the top of ``run_turn``, before any
+hook can stop the turn, and again where it always was, before the gates. The second call is
+what keeps a carrier of the host's own honest when it restores its metadata from inside one
+of those hooks — moving the clearing instead of adding to it would have let that one through.
+
 A defence, not a served defect: ``SessionRunner`` builds a fresh context each turn and carries
 a whitelist these keys are not on. A different carrier would have to make that choice itself.
 """
@@ -27,6 +35,7 @@ from cogno_anima.stages.superego import SuperegoStage
 from cogno_anima.types import PipelineContext
 
 from cogno_soma import Hooks, Pipeline, SessionRunner, StopPipeline, TurnConfig
+from cogno_soma import pipeline as pipeline_mod
 from tests.conftest import (FakeEgo, FakeID, FakeNER, FakeNoumeno, RecordingDispatcher,
                             StubBackend, StubEmbedder)
 
@@ -126,20 +135,77 @@ async def test_nothing_else_on_the_metadata_is_cleared_with_them(scope_prompt, i
         assert ctx.metadata[key] == value, why
 
 
-# ── the boundary: a stop BEFORE the gates is a third exit, and it is not covered ───────────
+# ── the third exit: a hook that stops the turn BEFORE the gates ────────────────────────────
 
-async def test_boundary_a_hook_that_stops_before_the_gates_ends_the_turn_before_the_clearing():
-    """Out of this change's reach, and pinned so the reach is not overstated. The clearing sits
-    where the first one did: after the ID, before the gates. A hook that raises
-    ``StopPipeline`` earlier ends the turn first, and whatever the context arrived with — the
-    verdict read included — is still on it. A carrier of the host's own drops the keys itself."""
-    def stop(ctx):
-        raise StopPipeline(reason="completed", response="Please hold.")
+GUARD_KEYS = [mk.SCOPE_PROMPT_SHA, mk.SCOPE_PROMPT_BLOCKS, mk.SCOPE_VERDICT_READ]
+STALE_ALL = {**STALE, mk.SCOPE_VERDICT_READ: "string_bool"}
+#: The hooks that fire before the gates, in the order they fire.
+BEFORE_THE_GATES = ["before_turn", "after_noumeno", "after_ner", "after_id"]
 
-    stale = {**STALE, mk.SCOPE_VERDICT_READ: "string_bool"}
-    ctx = await _turn(scope_prompt="only plans", metadata=stale, hooks=Hooks(after_ner=stop))
+
+def _stop(ctx):
+    raise StopPipeline(reason="completed", response="Please hold.")
+
+
+@pytest.mark.parametrize("key", GUARD_KEYS)
+@pytest.mark.parametrize("hook", BEFORE_THE_GATES)
+async def test_twin_a_stop_before_the_gates_carries_none_of_the_guards_record(hook, key):
+    """One twin per hook and per key. The turn has a scope prompt, so the only reason the guard
+    never ran is the stop."""
+    ctx = await _turn(scope_prompt="only plans", metadata=STALE_ALL, hooks=Hooks(**{hook: _stop}))
+    assert ctx.superego_result.response == "Please hold.", "the premise: the hook ended the turn"
+    assert not any(m.stage == "superego_scope" for m in ctx.stage_metrics), (
+        "the premise: the guard was never called")
+    assert key not in ctx.metadata, hook
+
+
+@pytest.mark.parametrize("hook", BEFORE_THE_GATES)
+async def test_nothing_else_is_cleared_by_a_stop_before_the_gates(hook):
+    """The adverse half of the twin above: the host's own keys leave as they came."""
+    mine = {mk.PROMPT_SHAS: {"scope": "9f3c1a"}, "scope_prompt_sha_of_the_host": "kept",
+            "tenant": "acme"}
+    ctx = await _turn(scope_prompt="only plans", metadata={**STALE_ALL, **mine},
+                      hooks=Hooks(**{hook: _stop}))
+    for key, value in mine.items():
+        assert ctx.metadata[key] == value, hook
+
+
+async def test_control_a_stop_after_the_guard_keeps_what_the_guard_wrote():
+    """The control of the twin: the clearing is never AFTER the guard. A turn that calls the
+    guard and is then stopped by a later hook leaves with the guard's own record of THIS turn —
+    not the stale one it arrived with, and not nothing."""
+    ctx = await _turn(scope_prompt="only plans", metadata=STALE_ALL,
+                      hooks=Hooks(after_superego=_stop))
     assert ctx.superego_result.response == "Please hold."
-    assert {k: ctx.metadata[k] for k in stale} == stale
+
+    direct = _context()
+    await FakeNoumeno("How much is the plan?").process(direct, None)
+    await FakeNER().process(direct, None)
+    result = await SuperegoStage().check_input_scope(direct, StubBackend(),
+                                                     scope_prompt="only plans")
+    assert ctx.metadata[mk.SCOPE_PROMPT_SHA] == result.prompt_sha != STALE_SHA
+    assert ctx.metadata[mk.SCOPE_PROMPT_BLOCKS] == result.prompt_blocks != STALE_BLOCKS
+    assert ctx.metadata[mk.SCOPE_VERDICT_READ] == result.verdict_read != "string_bool"
+
+
+# ── the second call: a carrier that restores its metadata from inside an early hook ────────
+
+@pytest.mark.parametrize("key", GUARD_KEYS)
+@pytest.mark.parametrize("hook", BEFORE_THE_GATES)
+@pytest.mark.parametrize("scope_prompt, id_stage, why", NEVER_CALLS_THE_GUARD)
+async def test_a_record_restored_by_an_early_hook_is_still_cleared_before_the_gates(
+        scope_prompt, id_stage, why, hook, key):
+    """The clearing at the top runs before every hook, so it cannot see what a hook puts back.
+    A host that restores a session's metadata in ``before_turn`` (or any hook up to
+    ``after_id``) was covered by the clearing before the gates, and still is: this passes on
+    the tree before, and fails if the clearing is MOVED to the top instead of added there."""
+    def restore(ctx):
+        ctx.metadata.update({k: (list(v) if isinstance(v, list) else v)
+                             for k, v in STALE_ALL.items()})
+
+    ctx = await _turn(scope_prompt=scope_prompt, id_stage=id_stage,
+                      hooks=Hooks(**{hook: restore}))
+    assert key not in ctx.metadata, f"{why}; restored in {hook}"
 
 
 # ── the declared scope: the session runner never carried them ──────────────────────────────
@@ -191,12 +257,40 @@ def _metakeys(fn, *, assigned: bool) -> "set[str]":
 
 def test_every_metakey_the_guard_writes_is_cleared_before_the_exits_that_skip_it():
     """Read off both sources. The guard's keys come from anima's own function; the pipeline's
-    clearings from ``run_turn``. A key the guard starts writing tomorrow fails here until the
-    pipeline clears it too."""
+    clearings from the one function that makes them. A key the guard starts writing tomorrow
+    fails here until the pipeline clears it too."""
     written = _metakeys(SuperegoStage.check_input_scope, assigned=True)
     assert {"SCOPE_PROMPT_BLOCKS", "SCOPE_PROMPT_SHA", "SCOPE_VERDICT_READ"} <= written, (
         "the reading found less than the three keys known today: it is not reading the guard")
     assert "SCOPE_PENDING_REQUEST" not in written, "a key the guard only READS is not its record"
 
-    cleared = _metakeys(Pipeline.run_turn, assigned=False)
+    cleared = _metakeys(pipeline_mod._clear_the_guards_record, assigned=False)
     assert written <= cleared, f"written by the guard, never cleared: {sorted(written - cleared)}"
+    assert cleared == written, f"cleared and not the guard's: {sorted(cleared - written)}"
+
+
+def _calls_in_order(fn, names: "set[str]") -> "list[str]":
+    """The calls ``fn`` makes to any of ``names`` (a bare function or a method), in source
+    order."""
+    found = []
+    for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(fn)))):
+        if isinstance(node, ast.Call):
+            callee = node.func
+            name = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", "")
+            if name in names:
+                found.append((node.lineno, node.col_offset, name))
+    return [name for _line, _col, name in sorted(found)]
+
+
+def test_the_clearing_runs_before_any_hook_and_again_before_the_gates():
+    """WHERE the two calls sit, read off ``run_turn``: the first before the first hook fires
+    (so no stop can precede it), the second after the last hook that precedes the gates and
+    before the guard is asked."""
+    order = _calls_in_order(Pipeline.run_turn, {"_clear_the_guards_record", "_fire",
+                                                "check_input_scope"})
+    assert order.count("_clear_the_guards_record") == 2
+    assert order[0] == "_clear_the_guards_record", "a hook fires before the first clearing"
+    second = order.index("_clear_the_guards_record", 1)
+    assert order[:second].count("_fire") == len(BEFORE_THE_GATES), (
+        "the second clearing is not right after the hooks that precede the gates")
+    assert order.index("check_input_scope") > second, "the guard is asked before the clearing"
