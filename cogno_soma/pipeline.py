@@ -709,6 +709,25 @@ def _stamp(ctx, metrics, *, attempt: Optional[int] = None,
         logger.debug("stage_stamp_failed", exc_info=True)
 
 
+def _record_ego_pass(ctx, attempt: int) -> None:
+    """What ONE executor pass leaves on the turn: its place in the call order, and what it ran.
+
+    The ONE place both are written, because the correction loop reaches it by two roads — the
+    line after ``self._ego.process`` returned, and the ``except StopPipeline`` around that call
+    (a host wraps the executor, and its wrapper may stop the turn after the inner stage has
+    built its result). A second copy on the second road is how the two would drift apart.
+
+    The executions join the turn HERE, before any exit of the loop. The gate-B ``break`` once
+    skipped this record together with the judge, and an attempt that EXECUTED writes and only
+    then held a destructive call left no trace at all — a hole in the ledger exactly where there
+    had been a write. The stop from inside the executor was the same hole by another door.
+    """
+    _stamp(ctx, ctx.ego_result.metrics if ctx.ego_result else None, attempt=attempt,
+           prompt=_sha_for(ctx, "ego"))
+    if ctx.ego_result:
+        ctx.turn_executions.extend(ctx.ego_result.tools_executed)
+
+
 def _attempt_tools(ego_result, limit_fn: "Optional[ToolResultLimitFn]" = None) -> dict:
     """One attempt's executions: the POLICY bit, then the bounded display list.
 
@@ -1304,22 +1323,40 @@ class Pipeline:
             # Complexity escalation: after the ID, a hard task can bump the EGO onto a stronger
             # model for this turn (the host's ladder policy); None keeps the configured backend.
             ego_backend = (cfg.escalate(ctx, "ego") if cfg.escalate else None) or cfg.ego_backend
-            ctx = await self._ego.process(ctx, ego_backend, dispatcher, system_prompt=cfg.ego_prompt)
-            _stamp(ctx, ctx.ego_result.metrics if ctx.ego_result else None, attempt=attempt,
-                   prompt=_sha_for(ctx, "ego"))
+            produced_before = ctx.ego_result
+            try:
+                ctx = await self._ego.process(ctx, ego_backend, dispatcher,
+                                              system_prompt=cfg.ego_prompt)
+            except StopPipeline:
+                # The stage is the host's to wrap, and a wrapper may stop the turn from INSIDE
+                # ``process``, after the inner stage built its result and ran its tools. The
+                # record below this ``try`` is then never reached: the pass kept a cost row
+                # with ``seq == 0`` and no host label, and what it executed never joined
+                # ``turn_executions``. So the pass is recorded here, by the same function, and
+                # the stop goes on.
+                #
+                # Only for a result THIS call produced. A stage that stopped before replacing
+                # it left the PREVIOUS attempt's on the context, already recorded; doing it
+                # again would list those executions twice and re-stamp that row as this attempt.
+                #
+                # ``StopPipeline`` and nothing wider: it is the one signal ``run_turn`` turns
+                # into a returned context. ``asyncio.CancelledError`` and every error unwind as
+                # before. And a record that cannot be made must not turn a stop into a crash.
+                if ctx.ego_result is not produced_before:
+                    try:
+                        _record_ego_pass(ctx, attempt)
+                    except Exception:  # noqa: BLE001 — telemetry never costs the turn its stop
+                        logger.debug("ego_pass_record_failed", exc_info=True)
+                raise
+            _record_ego_pass(ctx, attempt)
             # Gate B held a destructive call → a PROPOSE turn: the action was deliberately NOT
             # executed (the host runs the confirmation UX next; ``_awaiting_confirmation`` is set
             # independently in the assembler). There is nothing to judge-and-retry — the booking is
             # intentionally incomplete — so skip the judge: it would false-reject "booking not
             # completed" and burn a wasteful EGO retry on EVERY confirmation turn (measured:
             # the gpt-4o-mini judge rejects the [PENDING CONFIRMATION] hold 3/3). Voice grounds it.
-            # O que ESTA tentativa executou entra no turno agora — antes de qualquer saída do
-            # laço. O `break` do gate-B abaixo pulava o registro junto com o juiz, e uma
-            # tentativa que EXECUTOU escritas e só então segurou uma chamada destrutiva não
-            # deixava rastro nenhum: o ledger que este changeset promoveu a "a autoridade"
-            # tinha um buraco exatamente onde havia escrita.
-            if ctx.ego_result:
-                ctx.turn_executions.extend(ctx.ego_result.tools_executed)
+            # (What this attempt EXECUTED is already on the turn — `_record_ego_pass` above runs
+            # before any exit of the loop, this one included.)
             # …EXCEPT when a held call SENDS TEXT TO A PERSON (declared by the host,
             # `mk.HELD_DELIVERED_TEXT`). That text is final at the hold — the confirmed replay
             # sends those exact bytes — so skipping the judge here meant its only review ran

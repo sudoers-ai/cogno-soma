@@ -380,6 +380,25 @@ runs. `BaseStage` is reused from cogno-anima, not copied here. All four protocol
 `runtime_checkable`: `isinstance(double, IDStageProtocol)` in a test says the
 members EXIST; the signatures are the type checker's to hold.
 
+**Stopping the turn from inside a wrapped executor.** A wrapper around the EGO may raise
+`StopPipeline` from its own `process`, after the inner stage returned — to ask the contact about
+what the executor just proposed, say. The turn ends like any other stop (§3), and that pass is
+still on record (since 0.1.1; before, its row kept `seq == 0` and the executions stayed only on
+`ctx.ego_result`):
+- its `StageMetrics` row carries `seq`, `attempt` and your `ego` label;
+- what it executed is in `ctx.turn_executions`, after any earlier attempt's, once;
+- no row is added to `judge_attempts`: the judge did not read that pass.
+
+Three limits:
+- Only a result that call produced is recorded. A wrapper that stops BEFORE the inner stage ran
+  leaves the previous attempt's record as it was.
+- Only `StopPipeline` is handled. Any other exception, `asyncio.CancelledError` included, leaves
+  `run_turn` as before, and that pass is not recorded.
+- A `StopPipeline` raised by a TOOL is not a stop. cogno-anima's `EgoStage` wraps whatever
+  escapes `dispatcher.execute` in `ToolExecutionError`. Stop from the wrapper, not from the tool.
+
+`tests/unit/test_a_stop_inside_the_executor_is_recorded.py`.
+
 ## 7. What stays yours
 
 Persona selection, model-ladder/escalation, RBAC, metering/billing, the real

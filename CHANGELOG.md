@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.1 — 2026-10-13 — a stop from inside the executor leaves that pass on record
+
+The first version number since 0.1.0. Everything under "Unreleased" below is in this tree too
+and was never given a number of its own.
+
+### Fixed
+
+- **A `StopPipeline` raised from INSIDE the executor's `process` left that pass unrecorded**
+  (2026-10-13). `Pipeline(ego=…)` takes any stage of the documented shape, and a host wraps the
+  executor: the inner stage runs to its end, then the wrapper stops the turn. The loop recorded
+  a pass on the line after the `await`, which a stop never reaches.
+  - Before: the pass's `StageMetrics` row kept `seq == 0` and no host label (`prompt_sha == ""`;
+    `attempt == 0` too, for an executor that does not stamp its own), and what the pass
+    executed never joined `ctx.turn_executions`.
+  - Now: the row has its `seq`, its `attempt` and the host's `ego` label, and the executions
+    are on the turn, once, after those of any earlier attempt.
+  - **`committed_this_turn` did not change its answer.** It reads the surviving
+    `ctx.ego_result` as a floor, so it was already `True` on such a turn. A reader of
+    `turn_executions` alone, and a reader of the row, are who see the difference.
+  - One function records a pass (`_record_ego_pass`), on both roads: after `process` returned,
+    and in the `except StopPipeline` around it.
+  - Only a result THAT call produced is recorded. A stage that stops before replacing
+    `ctx.ego_result` leaves the previous attempt's row and executions as they were.
+  - Only `StopPipeline` is handled. `asyncio.CancelledError` and every other exception leave
+    `run_turn` as before, and that pass is not recorded.
+  - A record that cannot be made never turns the stop into a crash.
+  - No ledger row is written for that pass: the judge did not read it.
+  - **Out of reach:** a `StopPipeline` raised by a TOOL. cogno-anima's executor wraps whatever
+    escapes `dispatcher.execute` in `ToolExecutionError`, so it leaves `run_turn` as an error
+    with no result built. Pinned as a boundary, not repaired.
+  - A turn nobody stops is byte for byte what it was.
+    `tests/unit/test_a_stop_inside_the_executor_is_recorded.py`.
+
 ## Unreleased
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
