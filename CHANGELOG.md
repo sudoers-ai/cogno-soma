@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.1.1 — 2026-10-13 — a stop from inside the executor leaves that pass on record; a turn that skips the guard carries none of its prompt record
+
+The first version number since 0.1.0. Everything under "Unreleased" below is in this tree too
+and was never given a number of its own.
+
+### Fixed
+
+- **A `StopPipeline` raised from INSIDE the executor's `process` left that pass unrecorded**
+  (2026-10-13). `Pipeline(ego=…)` takes any stage of the documented shape, and a host wraps the
+  executor: the inner stage runs to its end, then the wrapper stops the turn. The loop recorded
+  a pass on the line after the `await`, which a stop never reaches.
+  - Before: the pass's `StageMetrics` row kept `seq == 0` and no host label (`prompt_sha == ""`;
+    `attempt == 0` too, for an executor that does not stamp its own), and what the pass
+    executed never joined `ctx.turn_executions`.
+  - Now: the row has its `seq`, its `attempt` and the host's `ego` label, and the executions
+    are on the turn, once, after those of any earlier attempt.
+  - **`committed_this_turn` did not change its answer.** It reads the surviving
+    `ctx.ego_result` as a floor, so it was already `True` on such a turn. A reader of
+    `turn_executions` alone, and a reader of the row, are who see the difference.
+  - One function records a pass (`_record_ego_pass`), on both roads: after `process` returned,
+    and in the `except StopPipeline` around it.
+  - Only a result THAT call produced is recorded. A stage that stops before replacing
+    `ctx.ego_result` leaves the previous attempt's row and executions as they were.
+  - Only `StopPipeline` is handled. `asyncio.CancelledError` and every other exception leave
+    `run_turn` as before, and that pass is not recorded.
+  - A record that cannot be made never turns the stop into a crash.
+  - No ledger row is written for that pass: the judge did not read it.
+  - **Out of reach:** a `StopPipeline` raised by a TOOL. cogno-anima's executor wraps whatever
+    escapes `dispatcher.execute` in `ToolExecutionError`, so it leaves `run_turn` as an error
+    with no result built. Pinned as a boundary, not repaired.
+  - A turn nobody stops is byte for byte what it was.
+    `tests/unit/test_a_stop_inside_the_executor_is_recorded.py`.
+- **A turn that never calls the scope guard could carry a stale record of the guard's prompt**
+  (2026-10-13). cogno-anima's guard leaves three per-turn facts on `ctx.metadata`:
+  `scope_prompt_blocks`, `scope_prompt_sha` and `scope_verdict_read`. It keeps them honest
+  itself, but only when it is called, and two exits of `run_turn` never call it: a turn with no
+  scope prompt, and a turn the PII gate ends first. The third key was cleared before those
+  exits already; the other two were not.
+  - Now `scope_prompt_sha` and `scope_prompt_blocks` are cleared at the same place, so on those
+    two exits both are ABSENT whatever the context arrived with.
+  - A turn that calls the guard keeps what the guard wrote, as before. `[]` (the guard was
+    called and built no prompt) stays apart from absent (the guard was not called).
+  - **A defence, not a served defect.** `SessionRunner` builds a fresh context every turn and
+    carries a whitelist these keys are not on, so no carrier shipped here could deliver a stale
+    one. A host that reuses a context, or carries metadata its own way, is who this protects.
+  - A derivation pins the rule: every metakey the guard's function assigns or removes must be
+    one `run_turn` removes. A fourth key fails the test until it is cleared too.
+  - **Not covered:** a hook that raises `StopPipeline` before the gates (`before_turn` to
+    `after_id`) ends the turn before this clearing, for all three keys.
+  - `tests/unit/test_the_guards_per_turn_keys_are_cleared.py`.
+
 ## Unreleased
 
 Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.

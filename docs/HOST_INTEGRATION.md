@@ -193,6 +193,16 @@ The guard's read is not in this ledger — it is anima's own per-turn metakey
 never calls the guard (no scope prompt, or the PII gate ended the turn first): the key is cleared
 before those exits, so a value a carrier left there is never read as this turn's.
 
+The same holds, since 0.1.1, for the guard's record of its own prompt:
+`ctx.metadata["scope_prompt_sha"]` and `ctx.metadata["scope_prompt_blocks"]`.
+- On those two exits both are ABSENT. No prompt was rendered, so there is nothing to describe.
+- On a turn that calls the guard they are what the guard wrote. `scope_prompt_blocks == []`
+  means the guard was called and built no prompt (a bypass); absent means it was not called.
+- `SessionRunner` never carried them: it builds a fresh context each turn. The clearing is for
+  a host that reuses a context or carries metadata its own way.
+- A hook that raises `StopPipeline` before the gates (`before_turn` to `after_id`) ends the
+  turn before the clearing. A carrier of your own must still drop the three keys itself.
+
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
 judge returned, never re-derived. It is per attempt because the branch can differ between
@@ -379,6 +389,25 @@ contract — a SUPEREGO double without it fails on exactly the path it least oft
 runs. `BaseStage` is reused from cogno-anima, not copied here. All four protocols are
 `runtime_checkable`: `isinstance(double, IDStageProtocol)` in a test says the
 members EXIST; the signatures are the type checker's to hold.
+
+**Stopping the turn from inside a wrapped executor.** A wrapper around the EGO may raise
+`StopPipeline` from its own `process`, after the inner stage returned — to ask the contact about
+what the executor just proposed, say. The turn ends like any other stop (§3), and that pass is
+still on record (since 0.1.1; before, its row kept `seq == 0` and the executions stayed only on
+`ctx.ego_result`):
+- its `StageMetrics` row carries `seq`, `attempt` and your `ego` label;
+- what it executed is in `ctx.turn_executions`, after any earlier attempt's, once;
+- no row is added to `judge_attempts`: the judge did not read that pass.
+
+Three limits:
+- Only a result that call produced is recorded. A wrapper that stops BEFORE the inner stage ran
+  leaves the previous attempt's record as it was.
+- Only `StopPipeline` is handled. Any other exception, `asyncio.CancelledError` included, leaves
+  `run_turn` as before, and that pass is not recorded.
+- A `StopPipeline` raised by a TOOL is not a stop. cogno-anima's `EgoStage` wraps whatever
+  escapes `dispatcher.execute` in `ToolExecutionError`. Stop from the wrapper, not from the tool.
+
+`tests/unit/test_a_stop_inside_the_executor_is_recorded.py`.
 
 ## 7. What stays yours
 
