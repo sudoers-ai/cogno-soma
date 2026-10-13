@@ -642,7 +642,7 @@ def _outcome(exec_) -> str:
 # First cut hashed the rendered text right here and claimed it was PII-free by construction.
 # It was PII by construction — found by asking a peer to refute it before the store existed,
 # which is the only reason it cost a revert instead of a migration.
-_SEQ_KEY = "_call_seq"          # private to this module; popped in `_finish`
+_SEQ_KEY = "_call_seq"          # private to this module; popped on both exits of `run_turn`
 
 
 def _sha_for(ctx, kind: str) -> str:
@@ -1022,6 +1022,34 @@ def _seat_intent(result: IntentResult, ctx: PipelineContext) -> IntentResult:
     return seated
 
 
+def _clear_the_guards_record(ctx: PipelineContext) -> None:
+    """Remove the three facts the scope guard leaves about ITSELF on ``ctx.metadata``.
+
+    How its verdict was read (``mk.SCOPE_VERDICT_READ``), the digest of the prompt it sent
+    (``mk.SCOPE_PROMPT_SHA``) and that prompt's inventory (``mk.SCOPE_PROMPT_BLOCKS``) are
+    PER-TURN. The guard keeps them honest itself — it removes the first on the paths where it
+    asks no verdict, and writes the other two again (``[]`` for the inventory when it
+    bypasses) — but only when it is CALLED. So ABSENT has to mean "the guard was not called
+    this turn", and a value a carrier left on the metadata would describe a prompt that was
+    never rendered and a verdict nobody asked for.
+
+    ``run_turn`` calls this TWICE, and each call covers an exit the other cannot:
+
+    * at the TOP, before any hook fires. A hook that raises ``StopPipeline`` before the gates
+      (``before_turn``, ``after_noumeno``, ``after_ner``, ``after_id``) ends the turn before
+      the guard, and before the second call;
+    * again BEFORE THE GATES, where the clearing always was. Two exits there never call the
+      guard (the PII gate, a turn with no scope prompt), and a host that restores a session's
+      metadata from inside one of those hooks puts the keys back AFTER the first call.
+
+    The scope selector's record (``mk.SCOPE_OPTIONS_SELECTION``) is not the guard's and is
+    not cleared here. Never raises: three ``dict.pop`` with a default.
+    """
+    ctx.metadata.pop(mk.SCOPE_VERDICT_READ, None)
+    ctx.metadata.pop(mk.SCOPE_PROMPT_SHA, None)
+    ctx.metadata.pop(mk.SCOPE_PROMPT_BLOCKS, None)
+
+
 def _zero_metrics(stage: str = "superego_voice") -> StageMetrics:
     """A no-cost metrics row for a synthesized (non-LLM) terminal response."""
     return StageMetrics(stage=stage, elapsed_ms=0.0, tokens_in=0, tokens_out=0, model="none")
@@ -1069,6 +1097,8 @@ class Pipeline:
         """
         hooks = cfg.hooks or Hooks()
         voice_backend = cfg.voice_backend or cfg.ego_backend
+        # Before ANY hook can stop the turn: see `_clear_the_guards_record` for the two calls.
+        _clear_the_guards_record(ctx)
         try:
             await self._fire(hooks.before_turn, ctx)
 
@@ -1095,18 +1125,13 @@ class Pipeline:
             # The scope selector's record is a PER-TURN fact: a carrier that holds metadata between
             # turns must never make this turn wear an earlier turn's selection.
             ctx.metadata.pop(mk.SCOPE_OPTIONS_SELECTION, None)
-            # …and so is HOW the guard's verdict was read. The guard removes it itself on the
-            # paths where it asks no verdict — but only when it is CALLED, and two exits below
-            # never call it (the PII gate, a turn with no scope prompt). ABSENT has to mean "no
-            # verdict was asked this turn", so the key is cleared before either of them.
-            ctx.metadata.pop(mk.SCOPE_VERDICT_READ, None)
-            # …and the same for the other two facts the guard leaves about ITS OWN PROMPT: the
-            # digest and the inventory. On those two exits no prompt was rendered, so a value a
-            # carrier left here would describe one that never existed. A guard that IS called
-            # writes both again a few lines down (`[]` for the inventory when it bypasses), so
+            # …and so are the three facts the guard leaves about itself: how its verdict was
+            # read, and the digest and the inventory of its prompt. The SECOND call of the two
+            # (`_clear_the_guards_record`): two exits below never call the guard (the PII gate,
+            # a turn with no scope prompt), and a hook above may have put a carried value back
+            # after the first call. A guard that IS called writes its own a few lines down, so
             # absent keeps meaning "never called" and `[]` keeps meaning "called, built nothing".
-            ctx.metadata.pop(mk.SCOPE_PROMPT_SHA, None)
-            ctx.metadata.pop(mk.SCOPE_PROMPT_BLOCKS, None)
+            _clear_the_guards_record(ctx)
 
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
             if ctx.id_result and ctx.id_result.blocked:
@@ -1292,6 +1317,11 @@ class Pipeline:
             if stop.response is not None:
                 ctx.superego_result = SuperegoResult(
                     response=stop.response, blocked=stop.blocked, metrics=_zero_metrics())
+            # A stopped turn does not go through `_finish`, so the stamp counter is removed
+            # here too: it is bookkeeping, and `ctx.metadata` is what a host persists. Left
+            # behind, a carrier that hands the metadata on would start the next turn's
+            # numbering from it. (`after_turn` is NOT fired on a stop; that is unchanged.)
+            ctx.metadata.pop(_SEQ_KEY, None)
             logger.debug("turn_stopped stop_reason=%s", stop.reason)
             return ctx
 
