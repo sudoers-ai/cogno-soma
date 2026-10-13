@@ -1023,15 +1023,21 @@ def _seat_intent(result: IntentResult, ctx: PipelineContext) -> IntentResult:
 
 
 def _clear_the_guards_record(ctx: PipelineContext) -> None:
-    """Remove the three facts the scope guard leaves about ITSELF on ``ctx.metadata``.
+    """Remove the four per-turn facts the scope guard and its selector leave on
+    ``ctx.metadata``.
 
-    How its verdict was read (``mk.SCOPE_VERDICT_READ``), the digest of the prompt it sent
-    (``mk.SCOPE_PROMPT_SHA``) and that prompt's inventory (``mk.SCOPE_PROMPT_BLOCKS``) are
+    How the guard's verdict was read (``mk.SCOPE_VERDICT_READ``), the digest of the prompt it
+    sent (``mk.SCOPE_PROMPT_SHA``) and that prompt's inventory (``mk.SCOPE_PROMPT_BLOCKS``) are
     PER-TURN. The guard keeps them honest itself — it removes the first on the paths where it
     asks no verdict, and writes the other two again (``[]`` for the inventory when it
     bypasses) — but only when it is CALLED. So ABSENT has to mean "the guard was not called
     this turn", and a value a carrier left on the metadata would describe a prompt that was
     never rendered and a verdict nobody asked for.
+
+    The fourth is the selector's record (``mk.SCOPE_OPTIONS_SELECTION``): what anima's
+    ``select_scope_options`` picked on a turn the guard BLOCKED, which the host reads to render
+    its closed question. It is written only when the selector runs, so a carried one would
+    offer this turn's contact the options of another question.
 
     ``run_turn`` calls this TWICE, and each call covers an exit the other cannot:
 
@@ -1042,12 +1048,13 @@ def _clear_the_guards_record(ctx: PipelineContext) -> None:
       guard (the PII gate, a turn with no scope prompt), and a host that restores a session's
       metadata from inside one of those hooks puts the keys back AFTER the first call.
 
-    The scope selector's record (``mk.SCOPE_OPTIONS_SELECTION``) is not the guard's and is
-    not cleared here. Never raises: three ``dict.pop`` with a default.
+    Both calls are BEFORE the guard and the selector, never after: a turn that runs either
+    leaves with what it wrote. Never raises: four ``dict.pop`` with a default.
     """
     ctx.metadata.pop(mk.SCOPE_VERDICT_READ, None)
     ctx.metadata.pop(mk.SCOPE_PROMPT_SHA, None)
     ctx.metadata.pop(mk.SCOPE_PROMPT_BLOCKS, None)
+    ctx.metadata.pop(mk.SCOPE_OPTIONS_SELECTION, None)
 
 
 def _zero_metrics(stage: str = "superego_voice") -> StageMetrics:
@@ -1122,15 +1129,13 @@ class Pipeline:
             _stamp(ctx, ctx.id_result.metrics if ctx.id_result else None)
             await self._fire(hooks.after_id, ctx)
 
-            # The scope selector's record is a PER-TURN fact: a carrier that holds metadata between
-            # turns must never make this turn wear an earlier turn's selection.
-            ctx.metadata.pop(mk.SCOPE_OPTIONS_SELECTION, None)
-            # …and so are the three facts the guard leaves about itself: how its verdict was
-            # read, and the digest and the inventory of its prompt. The SECOND call of the two
-            # (`_clear_the_guards_record`): two exits below never call the guard (the PII gate,
-            # a turn with no scope prompt), and a hook above may have put a carried value back
-            # after the first call. A guard that IS called writes its own a few lines down, so
-            # absent keeps meaning "never called" and `[]` keeps meaning "called, built nothing".
+            # The four per-turn facts the guard and its selector leave: how the guard's verdict
+            # was read, the digest and the inventory of its prompt, and the selector's record.
+            # The SECOND call of the two (`_clear_the_guards_record`): two exits below never
+            # call the guard (the PII gate, a turn with no scope prompt), and a hook above may
+            # have put a carried value back after the first call. A guard that IS called writes
+            # its own a few lines down, so absent keeps meaning "never called" and `[]` keeps
+            # meaning "called, built nothing"; a selector that runs writes its record after it.
             _clear_the_guards_record(ctx)
 
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
