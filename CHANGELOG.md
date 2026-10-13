@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.1.2 — 2026-10-13 — a stop before the gates carries none of the guard's record; a stopped turn leaves no stamp counter; LOGGING.md is the code's list
+
+Three small corrections next to 0.1.1. A turn nobody stops is byte for byte what it was.
+
+### Fixed
+
+- **A hook that stops the turn BEFORE the gates left the guard's three per-turn keys in place.**
+  `scope_verdict_read`, `scope_prompt_sha` and `scope_prompt_blocks` were cleared after the ID,
+  right before the gates. A `StopPipeline` from `before_turn`, `after_noumeno`, `after_ner` or
+  `after_id` ended the turn first, so the context left with whatever it arrived with. 0.1.1
+  named this as not covered.
+  - Now one function clears them (`pipeline._clear_the_guards_record`) and `run_turn` calls it
+    twice: at the top, before any hook fires, and again where the clearing always was.
+  - **Why twice, and not moved.** The call at the top cannot see what a hook puts back. A host
+    that restores a session's metadata from inside one of those four hooks was covered by the
+    clearing before the gates, and a move would have dropped that. Measured: with the second
+    call removed, 25 tests fail. 24 are that host's shape (4 hooks × 3 keys × the 2 exits that
+    skip the guard), and they pass on `b2bf3c3`; the other reads where the two calls sit.
+  - A turn that calls the guard keeps what the guard wrote, also when a later hook stops it.
+  - **Still not covered:** a hook that restores the keys and then stops the turn itself.
+  - **A defence, not a served defect**, as in 0.1.1: `SessionRunner` builds a fresh context
+    every turn and never carried these keys.
+  - `tests/unit/test_the_guards_per_turn_keys_are_cleared.py`: one twin per hook and per key,
+    the control, the adverse half, the restored-carrier twin, and where the two calls sit in
+    `run_turn`, read from its source.
+- **A turn a `StopPipeline` stopped left the stamp counter on `ctx.metadata`.** `_stamp` keeps
+  its count under `_call_seq` and `_finish` removes it, but a stopped turn does not go through
+  `_finish`. The one test there was covered the ordinary exit.
+  - Measured on `b2bf3c3`: a stop from `after_noumeno` left `_call_seq == 1`, from `after_id`
+    `3`, from `after_ego`, `on_commit` and `on_rollback` `5`, from `after_superego` `4`, and a
+    stop from inside the executor left it too.
+  - The consequence: a carrier that hands the metadata on made the next turn's first call
+    `seq == 4` instead of `1`.
+  - Now the `except StopPipeline` of `run_turn` removes it. The `seq` already stamped on each
+    metrics row stays. `after_turn` is still not fired on a stop.
+  - **Not covered:** an exception that is not `StopPipeline` leaves `run_turn` with the
+    counter on the context, as before.
+  - `tests/unit/test_the_stamp_counter_never_outlives_the_turn.py`: one twin per stop point,
+    each reading the counter at the instant of the stop first, and the two controls
+    (`before_turn`, where nothing was stamped; `after_turn`, where `_finish` already ran).
+
+### Docs
+
+- **`LOGGING.md` is the code's list.** It said the pipeline logs three DEBUG lines and nothing
+  at INFO. The package makes 15 log calls for 14 events, one of them at INFO
+  (`scope_block_lifted`), and three with a traceback.
+  - The page now has one row per event: logger, event, level, the `key=` fields and when.
+  - `tests/unit/test_logging_md_lists_what_the_code_emits.py` reads the calls from the source
+    by AST and compares them with the rows, in both directions. A new call fails it until the
+    page says what it is. The modules that log nothing and the level policy are held the same
+    way.
+  - It also corrects a sentence: the page said only the control-flow outcome is logged. Tool
+    NAMES (`read_retry_granted`), a model name (`judge_escalated`) and three tracebacks are
+    logged too, at DEBUG.
+- `docs/HOST_INTEGRATION.md` §4: the paragraph on the guard's keys says what a stop before the
+  gates now does, and what it does not.
+
 ## 0.1.1 — 2026-10-13 — a stop from inside the executor leaves that pass on record; a turn that skips the guard carries none of its prompt record
 
 The first version number since 0.1.0. Everything under "Unreleased" below is in this tree too

@@ -200,8 +200,14 @@ The same holds, since 0.1.1, for the guard's record of its own prompt:
   means the guard was called and built no prompt (a bypass); absent means it was not called.
 - `SessionRunner` never carried them: it builds a fresh context each turn. The clearing is for
   a host that reuses a context or carries metadata its own way.
-- A hook that raises `StopPipeline` before the gates (`before_turn` to `after_id`) ends the
-  turn before the clearing. A carrier of your own must still drop the three keys itself.
+- A hook that raises `StopPipeline` before the gates (`before_turn` to `after_id`) no longer
+  carries them either (since 0.1.2): the three keys are also cleared at the top of `run_turn`,
+  before any hook fires.
+- What a hook itself WRITES is another matter. A hook that restores a session's metadata puts
+  the keys back after that first clearing. The second one, before the gates, removes them
+  again; a hook that restores them and then stops the turn leaves them on the context.
+- `ctx.metadata["scope_options_selection"]`, the selector's record, is cleared before the
+  gates only. A stop before the gates leaves a carried one in place.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
