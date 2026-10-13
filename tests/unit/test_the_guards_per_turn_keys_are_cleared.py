@@ -19,6 +19,13 @@ hook can stop the turn, and again where it always was, before the gates. The sec
 what keeps a carrier of the host's own honest when it restores its metadata from inside one
 of those hooks — moving the clearing instead of adding to it would have let that one through.
 
+**The selector's record is the fourth key** (``mk.SCOPE_OPTIONS_SELECTION``, 0.1.3). On a
+turn the guard BLOCKED, anima's ``select_scope_options`` leaves what it picked there, for the
+host to render its closed question from. It is per-turn like the other three, and it was
+cleared before the gates only: a stop from any of the four hooks above left a carried one in
+place, 4 of 4. It joins the same function, so both calls cover it, and the derivation below
+reads the selector's source beside the guard's.
+
 A defence, not a served defect: ``SessionRunner`` builds a fresh context each turn and carries
 a whitelist these keys are not on. A different carrier would have to make that choice itself.
 """
@@ -29,15 +36,18 @@ import ast
 import inspect
 import textwrap
 
+import json
+
 import cogno_anima.metakeys as mk
 import pytest
+from cogno_anima.stages.scope_options import select_scope_options
 from cogno_anima.stages.superego import SuperegoStage
 from cogno_anima.types import PipelineContext
 
 from cogno_soma import Hooks, Pipeline, SessionRunner, StopPipeline, TurnConfig
 from cogno_soma import pipeline as pipeline_mod
-from tests.conftest import (FakeEgo, FakeID, FakeNER, FakeNoumeno, RecordingDispatcher,
-                            StubBackend, StubEmbedder)
+from tests.conftest import (FakeEgo, FakeID, FakeNER, FakeNoumeno, FakeSuperego,
+                            RecordingDispatcher, StubBackend, StubEmbedder)
 
 STALE_SHA = "0" * 12
 STALE_BLOCKS = [{"block": "scope_rules", "chars": 99999}]
@@ -57,10 +67,15 @@ class _Voice:
         return "The plan costs 10.", 30, 6
 
 
+def _copy(value):
+    """A stale value as a carrier would hand it over: its own object, never the constant."""
+    return list(value) if isinstance(value, list) else dict(value) if isinstance(
+        value, dict) else value
+
+
 def _context(metadata=None) -> PipelineContext:
     ctx = PipelineContext(user_input="how much is the plan?")
-    ctx.metadata.update({k: (list(v) if isinstance(v, list) else v)
-                         for k, v in (metadata or {}).items()})
+    ctx.metadata.update({k: _copy(v) for k, v in (metadata or {}).items()})
     return ctx
 
 
@@ -137,8 +152,15 @@ async def test_nothing_else_on_the_metadata_is_cleared_with_them(scope_prompt, i
 
 # ── the third exit: a hook that stops the turn BEFORE the gates ────────────────────────────
 
-GUARD_KEYS = [mk.SCOPE_PROMPT_SHA, mk.SCOPE_PROMPT_BLOCKS, mk.SCOPE_VERDICT_READ]
-STALE_ALL = {**STALE, mk.SCOPE_VERDICT_READ: "string_bool"}
+#: A selection an earlier turn left: another question, another list.
+STALE_SELECTION = {"outcome": "suggested", "covered": [], "suggested": ["Yearly plan"],
+                   "asked": "the yearly one", "offered": 3, "discarded": 0,
+                   "covered_unsupported": 0}
+#: The guard's three keys and its selector's one.
+GUARD_KEYS = [mk.SCOPE_PROMPT_SHA, mk.SCOPE_PROMPT_BLOCKS, mk.SCOPE_VERDICT_READ,
+              mk.SCOPE_OPTIONS_SELECTION]
+STALE_ALL = {**STALE, mk.SCOPE_VERDICT_READ: "string_bool",
+             mk.SCOPE_OPTIONS_SELECTION: STALE_SELECTION}
 #: The hooks that fire before the gates, in the order they fire.
 BEFORE_THE_GATES = ["before_turn", "after_noumeno", "after_ner", "after_id"]
 
@@ -188,6 +210,63 @@ async def test_control_a_stop_after_the_guard_keeps_what_the_guard_wrote():
     assert ctx.metadata[mk.SCOPE_VERDICT_READ] == result.verdict_read != "string_bool"
 
 
+# ── the fourth key: a turn that RUNS the selector keeps what the selector wrote ─────────────
+
+OPTIONS = ("Monthly plan", "Family plan", "consult_material")
+
+
+class _Selector:
+    model = "stub-selector"
+
+    def __init__(self, reply):
+        self.reply, self.calls = json.dumps(reply), 0
+
+    async def generate(self, system: str, prompt: str):
+        self.calls += 1
+        return self.reply, 50, 8
+
+
+async def _refused_turn(selector, *, hooks=None, metadata=None):
+    """A turn the guard BLOCKS, with a selector and a closed list on the configuration."""
+    pipe = Pipeline(embedder=StubEmbedder(), noumeno=FakeNoumeno("How much is the plan?"),
+                    ner=FakeNER(), id_stage=FakeID(route="SUPEREGO"), ego=FakeEgo(),
+                    superego=FakeSuperego(scope_blocked=True, refusal="I cannot help with that."))
+    cfg = TurnConfig(gen_backend=StubBackend(), ego_backend=StubBackend(), ego_prompt="x",
+                     scope_prompt="only plans", scope_selector_backend=selector,
+                     scope_options=OPTIONS, hooks=hooks)
+    return await pipe.run_turn(_context(metadata), cfg, dispatcher=RecordingDispatcher())
+
+
+async def test_control_a_turn_that_runs_the_selector_keeps_what_it_wrote():
+    """The clearing is BEFORE the selector, never after: the turn leaves with THIS turn's
+    selection, not the one it arrived with and not nothing."""
+    selector = _Selector({"answers": [], "maybe": ["Family plan"], "asked": "the plan"})
+    ctx = await _refused_turn(selector, metadata=STALE_ALL)
+    assert selector.calls == 1 and ctx.stop_reason == "scope_blocked"
+    record = ctx.metadata[mk.SCOPE_OPTIONS_SELECTION]
+    assert record != STALE_SELECTION
+    assert record["outcome"] == "suggested" and record["suggested"] == ["Family plan"]
+    assert record["asked"] == "the plan" and record["offered"] == len(OPTIONS)
+
+
+async def test_control_a_stop_after_the_selector_keeps_what_it_wrote():
+    """…also when a later hook stops the turn: a refused turn still fires ``after_turn``."""
+    selector = _Selector({"answers": [], "maybe": ["Family plan"], "asked": ""})
+    ctx = await _refused_turn(selector, metadata=STALE_ALL, hooks=Hooks(after_turn=_stop))
+    assert selector.calls == 1 and ctx.superego_result.response == "Please hold."
+    assert ctx.metadata[mk.SCOPE_OPTIONS_SELECTION]["suggested"] == ["Family plan"]
+
+
+@pytest.mark.parametrize("hook", BEFORE_THE_GATES)
+async def test_twin_a_stop_before_the_gates_never_reaches_the_selector(hook):
+    """The premise of the fourth key's twins, on the configuration where a selector EXISTS: the
+    stop comes first, nothing is selected, and the carried record is gone."""
+    selector = _Selector({"answers": [], "maybe": ["Family plan"], "asked": ""})
+    ctx = await _refused_turn(selector, metadata=STALE_ALL, hooks=Hooks(**{hook: _stop}))
+    assert selector.calls == 0, "the premise: the selector never ran"
+    assert mk.SCOPE_OPTIONS_SELECTION not in ctx.metadata, hook
+
+
 # ── the second call: a carrier that restores its metadata from inside an early hook ────────
 
 @pytest.mark.parametrize("key", GUARD_KEYS)
@@ -200,8 +279,7 @@ async def test_a_record_restored_by_an_early_hook_is_still_cleared_before_the_ga
     ``after_id``) was covered by the clearing before the gates, and still is: this passes on
     the tree before, and fails if the clearing is MOVED to the top instead of added there."""
     def restore(ctx):
-        ctx.metadata.update({k: (list(v) if isinstance(v, list) else v)
-                             for k, v in STALE_ALL.items()})
+        ctx.metadata.update({k: _copy(v) for k, v in STALE_ALL.items()})
 
     ctx = await _turn(scope_prompt=scope_prompt, id_stage=id_stage,
                       hooks=Hooks(**{hook: restore}))
@@ -256,17 +334,30 @@ def _metakeys(fn, *, assigned: bool) -> "set[str]":
 
 
 def test_every_metakey_the_guard_writes_is_cleared_before_the_exits_that_skip_it():
-    """Read off both sources. The guard's keys come from anima's own function; the pipeline's
-    clearings from the one function that makes them. A key the guard starts writing tomorrow
-    fails here until the pipeline clears it too."""
-    written = _metakeys(SuperegoStage.check_input_scope, assigned=True)
-    assert {"SCOPE_PROMPT_BLOCKS", "SCOPE_PROMPT_SHA", "SCOPE_VERDICT_READ"} <= written, (
+    """Read off the sources. The keys come from anima's own two functions — the guard and the
+    selector it hands a refused turn to; the pipeline's clearings from the one function that
+    makes them. A key either starts writing tomorrow fails here until the pipeline clears it
+    too."""
+    guard = _metakeys(SuperegoStage.check_input_scope, assigned=True)
+    assert {"SCOPE_PROMPT_BLOCKS", "SCOPE_PROMPT_SHA", "SCOPE_VERDICT_READ"} <= guard, (
         "the reading found less than the three keys known today: it is not reading the guard")
-    assert "SCOPE_PENDING_REQUEST" not in written, "a key the guard only READS is not its record"
+    assert "SCOPE_PENDING_REQUEST" not in guard, "a key the guard only READS is not its record"
+    selector = _metakeys(select_scope_options, assigned=True)
+    assert selector == {"SCOPE_OPTIONS_SELECTION"}, (
+        "the reading did not find the one key known today: it is not reading the selector")
 
+    written = guard | selector
     cleared = _metakeys(pipeline_mod._clear_the_guards_record, assigned=False)
-    assert written <= cleared, f"written by the guard, never cleared: {sorted(written - cleared)}"
-    assert cleared == written, f"cleared and not the guard's: {sorted(cleared - written)}"
+    assert written <= cleared, f"written by a guard, never cleared: {sorted(written - cleared)}"
+    assert cleared == written, f"cleared and not a guard's: {sorted(cleared - written)}"
+
+
+def test_the_clearings_live_in_one_function():
+    """``run_turn`` removes none of those keys itself: a pop written beside the call would be a
+    second list, and the next key would join only one of them."""
+    cleared = _metakeys(pipeline_mod._clear_the_guards_record, assigned=False)
+    assert len(cleared) == 4
+    assert _metakeys(Pipeline.run_turn, assigned=False) & cleared == set()
 
 
 def _calls_in_order(fn, names: "set[str]") -> "list[str]":
