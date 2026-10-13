@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.3 — 2026-10-13 — a stop before the gates carries no selector record either
+
+One small correction next to 0.1.2. A turn nobody stops is byte for byte what it was.
+
+### Fixed
+
+- **A hook that stops the turn BEFORE the gates left the selector's record in place.**
+  `scope_options_selection` is what anima's `select_scope_options` picked on a turn the scope
+  guard blocked, and the host renders its closed question from it. It is per-turn like the
+  guard's three keys, and it was cleared before the gates only. `docs/HOST_INTEGRATION.md`
+  said so.
+  - Measured on `92c06bb`: a `StopPipeline` from `before_turn`, `after_noumeno`, `after_ner` or
+    `after_id` left a carried record on the context, 4 of 4.
+  - Now it is the fourth key of `pipeline._clear_the_guards_record`, which `run_turn` calls at
+    the top, before any hook fires, and again before the gates. The separate removal that sat
+    before the gates is gone: one function holds the list.
+  - A turn that runs the selector keeps what the selector wrote, also when a later hook stops
+    it. Both clearings are before the selector.
+  - **Still not covered**, as in 0.1.2: a hook that restores the keys and then stops the turn
+    itself.
+  - **A defence, not a served defect**: `SessionRunner` builds a fresh context every turn and
+    never carried this key.
+  - `tests/unit/test_the_guards_per_turn_keys_are_cleared.py`: the selector's key joins the
+    twins by hook and the restored-carrier twins; two controls on a turn that runs the selector;
+    the premise that a stop before the gates never reaches it. The derivation by AST now reads
+    the keys anima's guard writes AND the one its selector writes, and requires the pipeline to
+    clear exactly those. A last test holds that `run_turn` removes none of them itself.
+
 ## 0.1.2 — 2026-10-13 — a stop before the gates carries none of the guard's record; a stopped turn leaves no stamp counter; LOGGING.md is the code's list
 
 Three small corrections next to 0.1.1. A turn nobody stops is byte for byte what it was.

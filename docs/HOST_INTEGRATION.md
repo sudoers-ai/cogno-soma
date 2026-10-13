@@ -206,8 +206,9 @@ The same holds, since 0.1.1, for the guard's record of its own prompt:
 - What a hook itself WRITES is another matter. A hook that restores a session's metadata puts
   the keys back after that first clearing. The second one, before the gates, removes them
   again; a hook that restores them and then stops the turn leaves them on the context.
-- `ctx.metadata["scope_options_selection"]`, the selector's record, is cleared before the
-  gates only. A stop before the gates leaves a carried one in place.
+- `ctx.metadata["scope_options_selection"]`, the selector's record, follows the same rule
+  since 0.1.3: it is the fourth key the two clearings remove. A stop before the gates no longer
+  leaves a carried one in place. A turn that runs the selector keeps what the selector wrote.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
