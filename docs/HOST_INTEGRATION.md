@@ -193,6 +193,16 @@ The guard's read is not in this ledger — it is anima's own per-turn metakey
 never calls the guard (no scope prompt, or the PII gate ended the turn first): the key is cleared
 before those exits, so a value a carrier left there is never read as this turn's.
 
+The same holds, since 0.1.1, for the guard's record of its own prompt:
+`ctx.metadata["scope_prompt_sha"]` and `ctx.metadata["scope_prompt_blocks"]`.
+- On those two exits both are ABSENT. No prompt was rendered, so there is nothing to describe.
+- On a turn that calls the guard they are what the guard wrote. `scope_prompt_blocks == []`
+  means the guard was called and built no prompt (a bypass); absent means it was not called.
+- `SessionRunner` never carried them: it builds a fresh context each turn. The clearing is for
+  a host that reuses a context or carries metadata its own way.
+- A hook that raises `StopPipeline` before the gates (`before_turn` to `after_id`) ends the
+  turn before the clearing. A carrier of your own must still drop the three keys itself.
+
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given
 (`execution` | `conversational` | `readonly`), copied from the `SuperegoResult.judge_branch` the
 judge returned, never re-derived. It is per attempt because the branch can differ between

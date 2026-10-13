@@ -1100,6 +1100,13 @@ class Pipeline:
             # never call it (the PII gate, a turn with no scope prompt). ABSENT has to mean "no
             # verdict was asked this turn", so the key is cleared before either of them.
             ctx.metadata.pop(mk.SCOPE_VERDICT_READ, None)
+            # …and the same for the other two facts the guard leaves about ITS OWN PROMPT: the
+            # digest and the inventory. On those two exits no prompt was rendered, so a value a
+            # carrier left here would describe one that never existed. A guard that IS called
+            # writes both again a few lines down (`[]` for the inventory when it bypasses), so
+            # absent keeps meaning "never called" and `[]` keeps meaning "called, built nothing".
+            ctx.metadata.pop(mk.SCOPE_PROMPT_SHA, None)
+            ctx.metadata.pop(mk.SCOPE_PROMPT_BLOCKS, None)
 
             # ── PII-CRITICAL gate (from ID) ───────────────────────────
             if ctx.id_result and ctx.id_result.blocked:

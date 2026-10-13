@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 — 2026-10-13 — a stop from inside the executor leaves that pass on record
+## 0.1.1 — 2026-10-13 — a stop from inside the executor leaves that pass on record; a turn that skips the guard carries none of its prompt record
 
 The first version number since 0.1.0. Everything under "Unreleased" below is in this tree too
 and was never given a number of its own.
@@ -32,6 +32,24 @@ and was never given a number of its own.
     with no result built. Pinned as a boundary, not repaired.
   - A turn nobody stops is byte for byte what it was.
     `tests/unit/test_a_stop_inside_the_executor_is_recorded.py`.
+- **A turn that never calls the scope guard could carry a stale record of the guard's prompt**
+  (2026-10-13). cogno-anima's guard leaves three per-turn facts on `ctx.metadata`:
+  `scope_prompt_blocks`, `scope_prompt_sha` and `scope_verdict_read`. It keeps them honest
+  itself, but only when it is called, and two exits of `run_turn` never call it: a turn with no
+  scope prompt, and a turn the PII gate ends first. The third key was cleared before those
+  exits already; the other two were not.
+  - Now `scope_prompt_sha` and `scope_prompt_blocks` are cleared at the same place, so on those
+    two exits both are ABSENT whatever the context arrived with.
+  - A turn that calls the guard keeps what the guard wrote, as before. `[]` (the guard was
+    called and built no prompt) stays apart from absent (the guard was not called).
+  - **A defence, not a served defect.** `SessionRunner` builds a fresh context every turn and
+    carries a whitelist these keys are not on, so no carrier shipped here could deliver a stale
+    one. A host that reuses a context, or carries metadata its own way, is who this protects.
+  - A derivation pins the rule: every metakey the guard's function assigns or removes must be
+    one `run_turn` removes. A fourth key fails the test until it is cleared too.
+  - **Not covered:** a hook that raises `StopPipeline` before the gates (`before_turn` to
+    `after_id`) ends the turn before this clearing, for all three keys.
+  - `tests/unit/test_the_guards_per_turn_keys_are_cleared.py`.
 
 ## Unreleased
 
