@@ -1,15 +1,18 @@
 """A turn that never calls the scope guard carries none of the guard's per-turn keys.
 
-``SuperegoStage.check_input_scope`` (cogno-anima) leaves three facts on ``ctx.metadata``, where
+``SuperegoStage.check_input_scope`` (cogno-anima) leaves four facts on ``ctx.metadata``, where
 a trace writer can reach them: the inventory of the prompt it sent (``mk.SCOPE_PROMPT_BLOCKS``),
-the digest of that prompt (``mk.SCOPE_PROMPT_SHA``) and how its verdict was read
-(``mk.SCOPE_VERDICT_READ``). All three are PER-TURN, and the guard keeps them honest itself —
+the digest of that prompt (``mk.SCOPE_PROMPT_SHA``), how its verdict was read
+(``mk.SCOPE_VERDICT_READ``) and — since cogno-anima 0.1.9 — what its reply needed repaired
+(``mk.SCOPE_REPAIRS``, cleared here since 0.1.4). All four are PER-TURN, and the guard keeps
+them honest itself —
 but only when it is CALLED. Two exits of ``run_turn`` never call it: a turn with no scope
 prompt, and a turn the PII gate ends first. On those, a value a carrier left on the metadata
 would be read as this turn's: a digest and an inventory of a prompt that was never rendered.
 
-The third key was cleared before those exits already. This file is the same rule for the other
-two, and one derivation so a fourth key cannot join the guard unseen.
+The read was cleared before those exits already. This file is the same rule for the others,
+and one derivation so another key cannot join the guard unseen. That derivation is what caught
+``SCOPE_REPAIRS``: against cogno-anima 0.1.9 it failed until the pipeline cleared it too.
 
 **A third exit never calls the guard either: a hook that stops the turn BEFORE the gates**
 (``before_turn``, ``after_noumeno``, ``after_ner``, ``after_id``). The clearing sat after the ID,
@@ -19,9 +22,9 @@ hook can stop the turn, and again where it always was, before the gates. The sec
 what keeps a carrier of the host's own honest when it restores its metadata from inside one
 of those hooks — moving the clearing instead of adding to it would have let that one through.
 
-**The selector's record is the fourth key** (``mk.SCOPE_OPTIONS_SELECTION``, 0.1.3). On a
+**The selector's record is the fifth key** (``mk.SCOPE_OPTIONS_SELECTION``, 0.1.3). On a
 turn the guard BLOCKED, anima's ``select_scope_options`` leaves what it picked there, for the
-host to render its closed question from. It is per-turn like the other three, and it was
+host to render its closed question from. It is per-turn like the guard's four, and it was
 cleared before the gates only: a stop from any of the four hooks above left a carried one in
 place, 4 of 4. It joins the same function, so both calls cover it, and the derivation below
 reads the selector's source beside the guard's.
@@ -51,7 +54,9 @@ from tests.conftest import (FakeEgo, FakeID, FakeNER, FakeNoumeno, FakeSuperego,
 
 STALE_SHA = "0" * 12
 STALE_BLOCKS = [{"block": "scope_rules", "chars": 99999}]
-STALE = {mk.SCOPE_PROMPT_SHA: STALE_SHA, mk.SCOPE_PROMPT_BLOCKS: STALE_BLOCKS}
+STALE_REPAIRS = ["salvaged_object"]
+STALE = {mk.SCOPE_PROMPT_SHA: STALE_SHA, mk.SCOPE_PROMPT_BLOCKS: STALE_BLOCKS,
+         mk.SCOPE_REPAIRS: STALE_REPAIRS}
 
 # (scope prompt, the ID double, which exit this is)
 NEVER_CALLS_THE_GUARD = [
@@ -92,7 +97,7 @@ async def _turn(*, scope_prompt="", id_stage=None, metadata=None, intent="INFORM
 
 # ── the twin, one per key and per exit ─────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("key", [mk.SCOPE_PROMPT_SHA, mk.SCOPE_PROMPT_BLOCKS])
+@pytest.mark.parametrize("key", [mk.SCOPE_PROMPT_SHA, mk.SCOPE_PROMPT_BLOCKS, mk.SCOPE_REPAIRS])
 @pytest.mark.parametrize("scope_prompt, id_stage, why", NEVER_CALLS_THE_GUARD)
 async def test_twin_a_turn_that_never_calls_the_guard_carries_no_stale_prompt_record(
         scope_prompt, id_stage, why, key):
@@ -107,6 +112,7 @@ async def test_the_premise_those_two_exits_really_do_not_call_the_guard(
     so on these exits no writer ran, and the absence above is the clearing's doing."""
     ctx = await _turn(scope_prompt=scope_prompt, id_stage=id_stage)
     assert mk.SCOPE_PROMPT_SHA not in ctx.metadata and mk.SCOPE_PROMPT_BLOCKS not in ctx.metadata
+    assert mk.SCOPE_REPAIRS not in ctx.metadata
     assert not any(m.stage == "superego_scope" for m in ctx.stage_metrics), why
 
 
@@ -126,6 +132,9 @@ async def test_control_a_consulted_guard_leaves_its_own_record_not_the_stale_one
 
     assert ctx.metadata[mk.SCOPE_PROMPT_SHA] == result.prompt_sha != STALE_SHA
     assert ctx.metadata[mk.SCOPE_PROMPT_BLOCKS] == result.prompt_blocks != STALE_BLOCKS
+    # …and what its reply needed repaired: the guard's own list (`[]` here — the stub answers a
+    # bare object), not the stale one and not absent.
+    assert ctx.metadata[mk.SCOPE_REPAIRS] == result.repairs == [] != STALE_REPAIRS
 
 
 async def test_control_a_guard_that_is_called_and_bypasses_says_so_in_its_own_words():
@@ -135,6 +144,7 @@ async def test_control_a_guard_that_is_called_and_bypasses_says_so_in_its_own_wo
     ctx = await _turn(scope_prompt="only plans", metadata=STALE, intent="SOCIAL")
     assert ctx.metadata[mk.SCOPE_PROMPT_BLOCKS] == []
     assert mk.SCOPE_PROMPT_SHA not in ctx.metadata
+    assert mk.SCOPE_REPAIRS not in ctx.metadata, "a bypass asked nothing: anima removes the list"
 
 
 # ── a key from somewhere else is not this rule's to touch ──────────────────────────────────
@@ -156,9 +166,9 @@ async def test_nothing_else_on_the_metadata_is_cleared_with_them(scope_prompt, i
 STALE_SELECTION = {"outcome": "suggested", "covered": [], "suggested": ["Yearly plan"],
                    "asked": "the yearly one", "offered": 3, "discarded": 0,
                    "covered_unsupported": 0}
-#: The guard's three keys and its selector's one.
+#: The guard's four keys and its selector's one.
 GUARD_KEYS = [mk.SCOPE_PROMPT_SHA, mk.SCOPE_PROMPT_BLOCKS, mk.SCOPE_VERDICT_READ,
-              mk.SCOPE_OPTIONS_SELECTION]
+              mk.SCOPE_REPAIRS, mk.SCOPE_OPTIONS_SELECTION]
 STALE_ALL = {**STALE, mk.SCOPE_VERDICT_READ: "string_bool",
              mk.SCOPE_OPTIONS_SELECTION: STALE_SELECTION}
 #: The hooks that fire before the gates, in the order they fire.
@@ -208,9 +218,10 @@ async def test_control_a_stop_after_the_guard_keeps_what_the_guard_wrote():
     assert ctx.metadata[mk.SCOPE_PROMPT_SHA] == result.prompt_sha != STALE_SHA
     assert ctx.metadata[mk.SCOPE_PROMPT_BLOCKS] == result.prompt_blocks != STALE_BLOCKS
     assert ctx.metadata[mk.SCOPE_VERDICT_READ] == result.verdict_read != "string_bool"
+    assert ctx.metadata[mk.SCOPE_REPAIRS] == result.repairs != STALE_REPAIRS
 
 
-# ── the fourth key: a turn that RUNS the selector keeps what the selector wrote ─────────────
+# ── the selector's key: a turn that RUNS the selector keeps what the selector wrote ─────────────
 
 OPTIONS = ("Monthly plan", "Family plan", "consult_material")
 
@@ -259,7 +270,7 @@ async def test_control_a_stop_after_the_selector_keeps_what_it_wrote():
 
 @pytest.mark.parametrize("hook", BEFORE_THE_GATES)
 async def test_twin_a_stop_before_the_gates_never_reaches_the_selector(hook):
-    """The premise of the fourth key's twins, on the configuration where a selector EXISTS: the
+    """The premise of the selector key's twins, on the configuration where a selector EXISTS: the
     stop comes first, nothing is selected, and the carried record is gone."""
     selector = _Selector({"answers": [], "maybe": ["Family plan"], "asked": ""})
     ctx = await _refused_turn(selector, metadata=STALE_ALL, hooks=Hooks(**{hook: _stop}))
@@ -339,8 +350,9 @@ def test_every_metakey_the_guard_writes_is_cleared_before_the_exits_that_skip_it
     makes them. A key either starts writing tomorrow fails here until the pipeline clears it
     too."""
     guard = _metakeys(SuperegoStage.check_input_scope, assigned=True)
-    assert {"SCOPE_PROMPT_BLOCKS", "SCOPE_PROMPT_SHA", "SCOPE_VERDICT_READ"} <= guard, (
-        "the reading found less than the three keys known today: it is not reading the guard")
+    assert {"SCOPE_PROMPT_BLOCKS", "SCOPE_PROMPT_SHA", "SCOPE_VERDICT_READ",
+            "SCOPE_REPAIRS"} <= guard, (
+        "the reading found less than the four keys known today: it is not reading the guard")
     assert "SCOPE_PENDING_REQUEST" not in guard, "a key the guard only READS is not its record"
     selector = _metakeys(select_scope_options, assigned=True)
     assert selector == {"SCOPE_OPTIONS_SELECTION"}, (
@@ -356,7 +368,9 @@ def test_the_clearings_live_in_one_function():
     """``run_turn`` removes none of those keys itself: a pop written beside the call would be a
     second list, and the next key would join only one of them."""
     cleared = _metakeys(pipeline_mod._clear_the_guards_record, assigned=False)
-    assert len(cleared) == 4
+    # Five since 0.1.4: the guard's four (cogno-anima 0.1.9 added what its reply needed
+    # repaired, `SCOPE_REPAIRS`) and the selector's one.
+    assert len(cleared) == 5
     assert _metakeys(Pipeline.run_turn, assigned=False) & cleared == set()
 
 

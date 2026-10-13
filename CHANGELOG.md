@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.1.4 — 2026-10-13 — the ledger records what the judge's reply needed repaired; the guard's repairs key is cleared with the others
+
+Needs cogno-anima 0.1.9, which counts what each JSON stage had to repair in a model's reply
+(`cogno_anima.repairs`). This release carries two of those lists to where a host reads them.
+Nothing is decided from them: the loop, the budget and every verdict are what they were.
+
+### Added
+
+- **`judge_attempts[i]["repairs"]`: what the deciding judge reply needed repaired, per attempt.**
+  `SuperegoStage.evaluate` reports it on `SuperegoResult.repairs` — a chain-of-thought block or a
+  code fence stripped, the object dug out of prose, a critique that was missing on a rejection.
+  The loop kept the result and dropped the field, as it once dropped `verdict_read`, so a judge
+  that answers in a fence on every turn and one that answers a bare object left the same ledger.
+  - **`fast_repairs`** is present only when a fast judge ran first and the attempt escalated
+    past it. It is written on every escalation, `[]` included, so the rate has its denominator.
+    When the fast judge approved, its list is `repairs`.
+  - **Closed.** The values go through anima's `closed_repairs` with the judge's stage. A mark of
+    another stage, or any other string a stand-in reports, is dropped.
+  - **Absent is "not on record".** The key is absent when the judge reported no read, when its
+    result carries no list, and on a `skipped` row. A present `[]` means the judge was asked
+    and its reply was read as it came.
+  - **It does not repeat `verdict_read`.** A verdict spelled in a string is `string_bool` there
+    and `[]` here. Count a judge's repairs as its marks plus its non-`boolean` reads.
+  - The keys are exported: `cogno_soma.LEDGER_REPAIRS`, `cogno_soma.LEDGER_FAST_REPAIRS`.
+
+### Fixed
+
+- **`ctx.metadata["scope_repairs"]` is cleared with the guard's other per-turn keys.**
+  cogno-anima 0.1.9 writes a fourth fact about the guard on the metadata. The guard removes it
+  on the paths where it asks nothing, but only when it is called. `_clear_the_guards_record` now
+  pops it too, at both of its calls. That function clears FIVE keys: the guard's four and the
+  selector's record, which 0.1.3 moved into it.
+  - **Found by the derivation, not by reading.** `test_the_guards_per_turn_keys_are_cleared.py`
+    reads the keys the guard and the selector write from anima's own functions and compares
+    them with the keys the pipeline clears. Against cogno-anima 0.1.9 and `4256cb7` it fails:
+    1 failed, 669 passed.
+  - **Two tests of 0.1.3 move with it, and why.** `test_the_clearings_live_in_one_function`
+    counted four cleared keys and now counts five. The derivation expected at least three keys
+    from the guard and now expects four. Both state the number of keys the guard writes, and
+    that number is one higher.
+  - The twins of that file now run over five keys: one per key on the two exits that skip the
+    guard, one per key and per hook for a stop before the gates, and one per key, per hook and
+    per exit for a carrier that restores its metadata from inside an early hook.
+
+### Changed
+
+- `cogno-anima>=0.1.9`. `Pipeline._judge` (private) returns a third element, the escalated fast
+  reply's list.
+- CI pins cogno-anima at the commit that carries 0.1.9.
+
+### Tests
+
+- `tests/unit/test_the_ledger_records_what_the_judge_repaired.py`, 31 tests: the twin (a fenced
+  approval and a bare one are different rows), every mark of the judge's alphabet reaching the
+  ledger as itself, a list per attempt, the two-tier judge, the stand-ins (a free string, a
+  mark of another stage, a carrier that is not a list, a result with no list), the skipped row,
+  and a control: with the two fields switched off every row is the same minus the keys.
+- No model was run. The suite is 715 tests; it was 670.
+
 ## 0.1.3 — 2026-10-13 — a stop before the gates carries no selector record either
 
 One small correction next to 0.1.2. A turn nobody stops is byte for byte what it was.

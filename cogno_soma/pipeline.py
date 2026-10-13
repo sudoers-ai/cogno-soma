@@ -42,6 +42,7 @@ from cogno_anima.stages.scope_options import select_scope_options
 from cogno_anima.stages.superego import (JUDGE_CONVERSATIONAL_BRANCH, JUDGE_EXECUTION,
                                          JUDGE_READONLY, SuperegoStage)
 from cogno_anima.tools import ToolDispatcher, ToolPolicyDispatcher
+from cogno_anima.repairs import closed_repairs
 from cogno_anima.verdict import VALID_VERDICT_READS
 from cogno_anima.types import (IntentResult, NoumenoResult, PipelineContext,
                                StageMetrics, SuperegoResult)
@@ -919,6 +920,54 @@ def _attempt_read(judge, fast_read: str = "") -> dict:
     return out
 
 
+# ── WHAT the judge's reply needed REPAIRED, per attempt ───────────────────────────────────
+#
+# `SuperegoStage.evaluate` (cogno-anima 0.1.9) says what it had to repair in the judge's reply
+# before it could use it — a chain-of-thought block or a fence stripped, the object dug out of
+# prose, a critique that was missing on a rejection — on `SuperegoResult.repairs`, a list of
+# marks from the closed `cogno_anima.repairs.VALID_JUDGE_REPAIRS`. The list is per `evaluate`
+# call and this loop keeps one result per attempt, so it is copied here for the same reason
+# `verdict_read` is: the field would otherwise reach no reader. It never repeats the read —
+# anima keeps the two apart, and so does the ledger.
+#
+# The KEYS are exported; the VALUES are closed with anima's own `closed_repairs`, by the judge's
+# stage, so nothing but a mark of that alphabet is ever written to metadata a host persists.
+LEDGER_REPAIRS = "repairs"
+LEDGER_FAST_REPAIRS = "fast_repairs"
+#: The ``StageMetrics.stage`` of a judge call — the key of its alphabet in anima's table.
+_JUDGE_STAGE = "superego_judge"
+
+
+def _judge_repairs(judge) -> "Optional[list[str]]":
+    """The repair marks a verdict reports, closed — or ``None`` when it has nothing on record.
+
+    ``None`` when the judge reported no READ (a stand-in that classifies nothing, or anima's
+    path that asked no verdict) or carries no list at all (an anima before 0.1.9): absent is
+    "not on record", and ``[]`` is a different answer — the judge was asked and its reply
+    needed nothing. A mark from outside the judge's alphabet is dropped, never written."""
+    if not _verdict_read(judge):
+        return None
+    marks = getattr(judge, "repairs", None)
+    return closed_repairs(marks, _JUDGE_STAGE) if isinstance(marks, (list, tuple)) else None
+
+
+def _attempt_repairs(judge, fast_repairs: "Optional[list[str]]" = None) -> dict:
+    """The ledger fields for what this attempt's judge reply needed repaired.
+
+    ``repairs`` is the list of the verdict that DECIDED the attempt. ``fast_repairs`` is present
+    only when a fast judge ran first AND the attempt escalated past it — the same rule, for the
+    same reason, as ``fast_verdict_read``: the strong judge's clean reply would otherwise be the
+    only one on record. Both keys are ABSENT when there is nothing to say (see
+    ``_judge_repairs``); a present ``[]`` means the reply was read as it came."""
+    out: dict = {}
+    marks = _judge_repairs(judge)
+    if marks is not None:
+        out[LEDGER_REPAIRS] = marks
+    if fast_repairs is not None:
+        out[LEDGER_FAST_REPAIRS] = fast_repairs
+    return out
+
+
 # ── WHAT the executor's prompt carried, per attempt ───────────────────────────────────────
 #
 # `EgoStage.process` (cogno-anima 0.1.5) records its own prompt on the `EgoResult`: which PARTS
@@ -1023,18 +1072,19 @@ def _seat_intent(result: IntentResult, ctx: PipelineContext) -> IntentResult:
 
 
 def _clear_the_guards_record(ctx: PipelineContext) -> None:
-    """Remove the four per-turn facts the scope guard and its selector leave on
+    """Remove the five per-turn facts the scope guard and its selector leave on
     ``ctx.metadata``.
 
-    How the guard's verdict was read (``mk.SCOPE_VERDICT_READ``), the digest of the prompt it
-    sent (``mk.SCOPE_PROMPT_SHA``) and that prompt's inventory (``mk.SCOPE_PROMPT_BLOCKS``) are
-    PER-TURN. The guard keeps them honest itself — it removes the first on the paths where it
-    asks no verdict, and writes the other two again (``[]`` for the inventory when it
+    How the guard's verdict was read (``mk.SCOPE_VERDICT_READ``), what its reply needed
+    repaired (``mk.SCOPE_REPAIRS``, cogno-anima 0.1.9), the digest of the prompt it sent
+    (``mk.SCOPE_PROMPT_SHA``) and that prompt's inventory (``mk.SCOPE_PROMPT_BLOCKS``) are
+    PER-TURN. The guard keeps them honest itself — it removes the first two on the paths where
+    it asks no verdict, and writes the other two again (``[]`` for the inventory when it
     bypasses) — but only when it is CALLED. So ABSENT has to mean "the guard was not called
     this turn", and a value a carrier left on the metadata would describe a prompt that was
     never rendered and a verdict nobody asked for.
 
-    The fourth is the selector's record (``mk.SCOPE_OPTIONS_SELECTION``): what anima's
+    The fifth is the selector's record (``mk.SCOPE_OPTIONS_SELECTION``): what anima's
     ``select_scope_options`` picked on a turn the guard BLOCKED, which the host reads to render
     its closed question. It is written only when the selector runs, so a carried one would
     offer this turn's contact the options of another question.
@@ -1049,9 +1099,10 @@ def _clear_the_guards_record(ctx: PipelineContext) -> None:
       metadata from inside one of those hooks puts the keys back AFTER the first call.
 
     Both calls are BEFORE the guard and the selector, never after: a turn that runs either
-    leaves with what it wrote. Never raises: four ``dict.pop`` with a default.
+    leaves with what it wrote. Never raises: five ``dict.pop`` with a default.
     """
     ctx.metadata.pop(mk.SCOPE_VERDICT_READ, None)
+    ctx.metadata.pop(mk.SCOPE_REPAIRS, None)
     ctx.metadata.pop(mk.SCOPE_PROMPT_SHA, None)
     ctx.metadata.pop(mk.SCOPE_PROMPT_BLOCKS, None)
     ctx.metadata.pop(mk.SCOPE_OPTIONS_SELECTION, None)
@@ -1129,8 +1180,9 @@ class Pipeline:
             _stamp(ctx, ctx.id_result.metrics if ctx.id_result else None)
             await self._fire(hooks.after_id, ctx)
 
-            # The four per-turn facts the guard and its selector leave: how the guard's verdict
-            # was read, the digest and the inventory of its prompt, and the selector's record.
+            # The five per-turn facts the guard and its selector leave: how the guard's verdict
+            # was read, what its reply needed repaired, the digest and the inventory of its
+            # prompt, and the selector's record.
             # The SECOND call of the two (`_clear_the_guards_record`): two exits below never
             # call the guard (the PII gate, a turn with no scope prompt), and a hook above may
             # have put a carried value back after the first call. A guard that IS called writes
@@ -1428,7 +1480,7 @@ class Pipeline:
                                "skipped": JUDGE_SKIP_PREJUDGED_REPLAY})
                 logger.debug("judge_skipped reason=%s", JUDGE_SKIP_PREJUDGED_REPLAY)
                 break
-            judge, fast_read = await self._judge(ctx, cfg, attempt=attempt)
+            judge, fast_read, fast_repairs = await self._judge(ctx, cfg, attempt=attempt)
             # Record WHY, not just how many. The rejected attempts' critiques were fed into
             # EGO_CORRECTION.reason (overwritten each attempt) and then dropped, so after the
             # turn the only surviving fact was the count — and a red bench check could not be
@@ -1464,6 +1516,7 @@ class Pipeline:
                 **_attempt_prompt(ctx.ego_result),
                 **_attempt_branch(judge),
                 **_attempt_read(judge, fast_read),
+                **_attempt_repairs(judge, fast_repairs),
             }
             ledger.append(entry)
             if judge.approved:
@@ -1513,9 +1566,11 @@ class Pipeline:
                                               "attempts": attempt}
         return judge
 
-    async def _judge(self, ctx, cfg: TurnConfig, *, attempt: int = 0) -> "tuple[SuperegoResult, str]":
+    async def _judge(self, ctx, cfg: TurnConfig, *, attempt: int = 0,
+                     ) -> "tuple[SuperegoResult, str, Optional[list[str]]]":
         """One judge verdict, optionally two-tier (``judge_fast_backend``) — and, beside it, how
-        the FAST judge's verdict was read when the attempt escalated past it (``""`` otherwise).
+        the FAST judge's verdict was read when the attempt escalated past it (``""`` otherwise)
+        and what that reply needed repaired (``None`` otherwise).
 
         The fast judge screens every attempt; only its REJECTIONS escalate to the
         strong judge, whose verdict is authoritative. A fast approve is final (the
@@ -1526,23 +1581,26 @@ class Pipeline:
         A fast verdict that could not be READ is a fast rejection (anima fails closed), so it
         escalates like any other — which is the right repair, and would also erase the only
         record that the fast model answered in something other than a JSON boolean. Hence the
-        second element: the read of the verdict that was escalated past, for the ledger.
+        second element: the read of the verdict that was escalated past, for the ledger. The
+        third is the same rule for its repair marks (``_judge_repairs``).
         """
         strong = cfg.judge_backend or cfg.gen_backend
         fast = cfg.judge_fast_backend
         fast_read = ""
+        fast_repairs: "Optional[list[str]]" = None
         if fast is not None and fast is not strong:
             verdict = await self._superego.evaluate(ctx, fast, limits_prompt=cfg.limits_prompt)
             _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx))
             ctx.retry_metrics.append(verdict.metrics)
             if verdict.approved:
-                return verdict, ""
+                return verdict, "", None
             fast_read = _verdict_read(verdict)
+            fast_repairs = _judge_repairs(verdict)
             logger.debug("judge_escalated fast_model=%s", getattr(fast, "model", "unknown"))
         verdict = await self._superego.evaluate(ctx, strong, limits_prompt=cfg.limits_prompt)
         _stamp(ctx, verdict.metrics, attempt=attempt, prompt=_judge_sha(ctx))
         ctx.retry_metrics.append(verdict.metrics)
-        return verdict, fast_read
+        return verdict, fast_read, fast_repairs
 
     async def _finish(self, ctx, hooks: Hooks) -> PipelineContext:
         # The stamp counter is bookkeeping, not a contract: every exit goes through here, so

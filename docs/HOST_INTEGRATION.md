@@ -144,6 +144,8 @@ The keys, and where each is written (`cogno_soma/pipeline.py`, in the correction
 | `branch` | the criteria block this attempt's judge was given (below) | `_attempt_branch` |
 | `verdict_read` | HOW this attempt's deciding verdict was read — a value of `cogno_anima.VALID_VERDICT_READS` (`boolean` = `approved` is what the judge said; anything else is the fail-closed fallback). The key is `cogno_soma.LEDGER_VERDICT_READ`. Absent when the judge reported no read (a stand-in stage) and on a `skipped` row | `_attempt_read` |
 | `fast_verdict_read` | present ONLY when a fast judge ran first and the attempt escalated past it: the read of THAT verdict (`cogno_soma.LEDGER_FAST_VERDICT_READ`). When the fast judge approved, its read is `verdict_read` | `_attempt_read` |
+| `repairs` | WHAT this attempt's deciding judge reply needed repaired before it could be used — a list of marks from `cogno_anima.repairs.VALID_JUDGE_REPAIRS` (`fence_or_think_stripped`, `salvaged_object`, `default:critique`, `null_field:critique`, `coerced:critique`), closed with `cogno_anima.closed_repairs`. The key is `cogno_soma.LEDGER_REPAIRS`. `[]` = the reply was read as it came. Absent when the judge reported no read, when its result carries no list (a stand-in, an anima before 0.1.9), and on a `skipped` row. It never repeats `verdict_read` | `_attempt_repairs` |
+| `fast_repairs` | present ONLY when a fast judge ran first and the attempt escalated past it: the list of THAT reply (`cogno_soma.LEDGER_FAST_REPAIRS`), `[]` included. When the fast judge approved, its list is `repairs` | `_attempt_repairs` |
 | `ego_prompt_blocks` | which PARTS this attempt's executor prompt carried and how long each was: `[{"block", "chars"}]`, slugs from `cogno_anima.EGO_PROMPT_BLOCKS`, at most 16 rows (`cogno_soma.LEDGER_EGO_PROMPT_BLOCKS`). Absent when nothing is on record | `_attempt_prompt` |
 | `ego_prompt_blocks_dropped` | how many rows were left out (a slug outside the alphabet, a bad length, past the 16th) — present only when some were | `_attempt_prompt` |
 | `ego_prompt_sha` | anima's digest of what this attempt started from: system prompt, task, native tool schemas (`cogno_soma.LEDGER_EGO_PROMPT_SHA`). Absent when not on record | `_attempt_prompt` |
@@ -193,6 +195,11 @@ The guard's read is not in this ledger — it is anima's own per-turn metakey
 never calls the guard (no scope prompt, or the PII gate ended the turn first): the key is cleared
 before those exits, so a value a carrier left there is never read as this turn's.
 
+The same holds, since 0.1.4, for what the guard's reply needed repaired
+(`ctx.metadata["scope_repairs"]`, cogno-anima 0.1.9): absent on a turn that never calls the
+guard, the guard's own list (`[]` included) on a turn that does. Count a judge's or a guard's
+repairs as its marks PLUS its non-`boolean` reads: the two records never repeat each other.
+
 The same holds, since 0.1.1, for the guard's record of its own prompt:
 `ctx.metadata["scope_prompt_sha"]` and `ctx.metadata["scope_prompt_blocks"]`.
 - On those two exits both are ABSENT. No prompt was rendered, so there is nothing to describe.
@@ -201,13 +208,13 @@ The same holds, since 0.1.1, for the guard's record of its own prompt:
 - `SessionRunner` never carried them: it builds a fresh context each turn. The clearing is for
   a host that reuses a context or carries metadata its own way.
 - A hook that raises `StopPipeline` before the gates (`before_turn` to `after_id`) no longer
-  carries them either (since 0.1.2): the three keys are also cleared at the top of `run_turn`,
-  before any hook fires.
+  carries them either (since 0.1.2): the guard's keys — four of them since 0.1.4, with
+  `scope_repairs` — are also cleared at the top of `run_turn`, before any hook fires.
 - What a hook itself WRITES is another matter. A hook that restores a session's metadata puts
   the keys back after that first clearing. The second one, before the gates, removes them
   again; a hook that restores them and then stops the turn leaves them on the context.
 - `ctx.metadata["scope_options_selection"]`, the selector's record, follows the same rule
-  since 0.1.3: it is the fourth key the two clearings remove. A stop before the gates no longer
+  since 0.1.3: it is one of the five keys the two clearings remove (the fifth since 0.1.4). A stop before the gates no longer
   leaves a carried one in place. A turn that runs the selector keeps what the selector wrote.
 
 Each entry also carries `branch` — which criteria block THAT attempt's judge was given

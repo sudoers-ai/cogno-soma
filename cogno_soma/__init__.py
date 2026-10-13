@@ -17,7 +17,8 @@ from cogno_soma.pipeline import (EXTRA_PASS_ACTION, EXTRA_PASS_HELD_MESSAGE, EXT
                                  EXTRA_PASSES, JUDGE_SKIP_PREJUDGED_REPLAY, JUDGE_SKIPS,
                                  LEDGER_EGO_PROMPT_BLOCKS, LEDGER_EGO_PROMPT_BLOCKS_DROPPED,
                                  LEDGER_EGO_PROMPT_PATH, LEDGER_EGO_PROMPT_SHA,
-                                 LEDGER_FAST_VERDICT_READ, LEDGER_VERDICT_READ,
+                                 LEDGER_FAST_REPAIRS, LEDGER_FAST_VERDICT_READ,
+                                 LEDGER_REPAIRS, LEDGER_VERDICT_READ,
                                  PREJUDGED_TEXT_SHA, Pipeline, STOP_JUDGE_EXHAUSTED, prejudged_digest)
 from cogno_soma.session import (CARRIER_CONTEXT, CARRIER_CONTEXT_DATA, CONTEXT_CARRIERS,
                                 CONTEXT_LAYER_SLUGS, CONTEXT_LAYERS_KEY,
@@ -63,6 +64,11 @@ __all__ = [
     # `cogno_anima.VALID_VERDICT_READS`; a host persisting the ledger reads the keys from here.
     "LEDGER_VERDICT_READ",
     "LEDGER_FAST_VERDICT_READ",
+    # The ledger keys for what a judge reply needed REPAIRED (`judge_attempts[i]["repairs"]`, and
+    # `["fast_repairs"]` when a fast judge was escalated past). The VALUES are marks of
+    # `cogno_anima.repairs.VALID_JUDGE_REPAIRS`, closed here with anima's `closed_repairs`.
+    "LEDGER_REPAIRS",
+    "LEDGER_FAST_REPAIRS",
     # The ledger keys for what each attempt's EXECUTOR PROMPT carried
     # (`judge_attempts[i]["ego_prompt_blocks"]`, `["ego_prompt_sha"]`, `["ego_prompt_path"]`).
     # The values are closed by `cogno_anima.EGO_PROMPT_BLOCKS` / `VALID_EGO_PROMPT_PATHS`; a
@@ -111,4 +117,4 @@ __all__ = [
     "OPENING_INTENT",
 ]
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
