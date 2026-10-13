@@ -1,6 +1,6 @@
 [project]
 name = "cogno-soma"
-version = "0.1.3"
+version = "0.1.4"
 description = "The reference orchestrator for the Cogno cognitive pipeline — wires cogno-anima's stages (NOUMENO→NER→ID→EGO⇄SUPEREGO→Drift) end-to-end with the correction loop, PII/scope/handoff gates, an interception seam and atomicity hooks. Infra-agnostic: the host injects backends, the dispatcher and prompts."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ classifiers = [
 # (it re-exports the cogno-synapse protocols soma also imports directly). Neither is
 # on PyPI yet; CI installs them from git first (see .github/workflows/ci.yml).
 dependencies = [
-    "cogno-anima>=0.1.5,<0.2",
+    "cogno-anima>=0.1.9,<0.2",
     "cogno-synapse>=0.1,<0.2",
 ]
 
