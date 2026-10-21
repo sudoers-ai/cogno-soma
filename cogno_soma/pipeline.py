@@ -1443,6 +1443,14 @@ class Pipeline:
                         logger.debug("ego_pass_record_failed", exc_info=True)
                 raise
             _record_ego_pass(ctx, attempt)
+            # THE SEAM BETWEEN THE EXECUTOR AND THE JUDGE (`Hooks.after_ego_attempt`), once per
+            # pass and BEFORE everything below reads the attempt — the held-proposal skip, the
+            # pre-judged replay and the judge itself. A host that corrects the executor's output
+            # deterministically (a held recipient aligned to the name the contact wrote) must do
+            # it HERE: `after_ego` fires after the loop, when the judge has already read the
+            # uncorrected attempt. After the record above, so a stop raised from the hook leaves
+            # what this pass executed on the turn, exactly as a stop from inside the stage does.
+            await self._fire(hooks.after_ego_attempt, ctx)
             # Gate B held a destructive call → a PROPOSE turn: the action was deliberately NOT
             # executed (the host runs the confirmation UX next; ``_awaiting_confirmation`` is set
             # independently in the assembler). There is nothing to judge-and-retry — the booking is

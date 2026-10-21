@@ -35,12 +35,21 @@ class Hooks:
     ``after_id`` → [gates] → EGO⇄SUPEREGO loop → ``after_ego`` → SUPEREGO.voice →
     ``after_superego`` → ``after_turn``. ``on_rollback`` fires before each EGO retry;
     ``on_commit`` fires once the judge approves.
+
+    Inside the loop, ``after_ego_attempt`` fires after EVERY executor pass that returned —
+    the first and each correction — and BEFORE that attempt is judged (or skipped as a held
+    proposal, or as a pre-judged replay). What it changes on ``ctx.ego_result`` is what the
+    judge reads; it may raise ``StopPipeline`` like any hook, and the pass is already recorded
+    on the turn when it fires. It is the seam a host needs to correct an executor's output
+    deterministically before the judge sees it (a held recipient aligned to the name the
+    contact wrote); ``after_ego`` fires once, after the loop, and is too late for that.
     """
 
     before_turn: Optional[HookFn] = None
     after_noumeno: Optional[HookFn] = None
     after_ner: Optional[HookFn] = None
     after_id: Optional[HookFn] = None
+    after_ego_attempt: Optional[HookFn] = None   # per executor pass, before its judgement
     after_ego: Optional[HookFn] = None
     after_superego: Optional[HookFn] = None
     after_turn: Optional[HookFn] = None

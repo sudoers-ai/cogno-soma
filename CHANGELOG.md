@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.5 — 2026-10-21 — `after_ego_attempt`: the seam between the executor and the judge, once per attempt
+
+### Added
+
+- **`Hooks.after_ego_attempt`.** `after_ego` fires after the EGO⇄SUPEREGO loop, so a host that has
+  to correct what the executor produced BEFORE the judge reads it had no hook. The reference host
+  aligns a held message's recipient to the name the contact wrote; with the alignment in
+  `after_ego` the judge read the executor's rendering of the name, rejected it and the turn
+  exhausted, and the host now WRAPS the EGO stage to run it after every executor pass — a wrapper
+  doing a hook's job.
+  - It fires after EVERY executor pass that returned — the first and each correction — right
+    after the pass is recorded, and BEFORE everything that reads the attempt: the held-proposal
+    skip, the pre-judged replay and the judge.
+  - What it changes on `ctx.ego_result` is what the judge reads.
+  - It may raise `StopPipeline` like any hook: the turn ends with the host's answer, the judge
+    never reads that attempt, and what the pass executed is already on `turn_executions`.
+  - Absent, nothing changes: `after_ego` still fires once, after the loop.
+- `tests/unit/test_after_ego_attempt_hook.py` (6; 5 red on `f7a10e1`, the control green in both
+  worlds): the order over two attempts, the judge reading what the hook changed, the held proposal
+  the judge does not read, the stop that leaves the pass recorded, an async hook, and the control.
+- **The host's migration is not here.** Moving the host's wrapper (`ego_stage.aligning_ego`) to this
+  hook is a host PR after it pins 0.1.5.
+- Docs: `README.md` (the fire order), `docs/HOST_INTEGRATION.md`.
+
 ## 0.1.4 — 2026-10-13 — the ledger records what the judge's reply needed repaired; the guard's repairs key is cleared with the others
 
 Needs cogno-anima 0.1.9, which counts what each JSON stage had to repair in a model's reply

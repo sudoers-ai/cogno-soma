@@ -126,8 +126,9 @@ cfg = TurnConfig(..., hooks=Hooks(
 ```
 
 Fire order: `before_turn` → NOUMENO → `after_noumeno` → NER → `after_ner` → ID →
-`after_id` → gates → EGO⇄SUPEREGO (`on_rollback` per retry, `on_commit` on
-approval) → `after_ego` → voice → `after_superego` → `after_turn`.
+`after_id` → gates → EGO⇄SUPEREGO (`after_ego_attempt` after each executor pass and before
+its judgement, `on_rollback` per retry, `on_commit` on approval) → `after_ego` → voice →
+`after_superego` → `after_turn`.
 
 A **proposal** turn (the EGO held a call for the contact's "yes") skips the judge, because
 the action is incomplete on purpose. The exception is a held call that sends text to a
