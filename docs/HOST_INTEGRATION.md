@@ -279,6 +279,16 @@ any other turn, and the judge reads the held text itself (cogno-anima's
   `approved: false`. Without such a gate, soma's own exhaustion path takes the turn
   (`stop_reason = "judge_exhausted"`, nothing is proposed).
 
+**Correcting an attempt before the judge reads it: `after_ego_attempt` (0.1.5).** It fires after
+EVERY executor pass that returned — the first and each correction — and BEFORE that attempt is
+judged, or skipped as a held proposal or a pre-judged replay. What it changes on `ctx.ego_result`
+is what the judge reads; it may raise `StopPipeline` (the turn ends with your answer, the judge
+never reads that attempt, and what the pass executed is already on `turn_executions`). This is the
+seam for a deterministic correction of the executor's output — a held message's recipient aligned
+to the name the contact wrote — which `after_ego` cannot be: it fires after the loop, when the judge
+has already read the uncorrected attempt. A host that wrapped the EGO stage to get this seam can
+move that work here.
+
 Every other hold keeps the skip, byte for byte: no declaration, a declaration that is not a
 mapping, or held calls whose tools the declaration does not name. A declared call whose text
 argument is missing or empty is still judged: an empty message is still a message about to be
