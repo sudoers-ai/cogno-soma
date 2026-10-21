@@ -35,7 +35,9 @@ python examples/secretary_demo.py --trace     # full install chain in the praxis
 pip install cogno-soma          # pulls cogno-anima + cogno-synapse
 ```
 
-> The sibling libs are not on PyPI yet — install them from git first
+> PyPI carries older releases than this tree needs: on 2026-10-21 it had `cogno-soma` 0.1.0
+> and `cogno-anima` 0.1.0, while this tree (0.1.5) requires `cogno-anima>=0.1.9`
+> (`pyproject.toml`). Install the chain from git first, at the SHAs CI pins
 > (`cogno-homeo`, then `cogno-synapse`, then `cogno-engram`, then `cogno-anima`); see
 > `.github/workflows/ci.yml`. `cogno-engram` is in the chain because the anima's "did you mean…?"
 > selector reads its tokenizer, and fails closed without it (#57).
@@ -65,6 +67,15 @@ print(ctx.superego_result.response)     # the final, voiced reply
 The four prompt strings come from the host (e.g. resolved via
 [`cogno-persona`](https://github.com/sudoers-ai/cogno-persona)'s `PersonaSelector`).
 soma is **prompt-agnostic** — it does not depend on a persona store.
+
+`TurnConfig` carries the rest of the wiring, all optional (`cogno_soma/config.py`): a
+`voice_backend` (default: `ego_backend`); a model per JSON stage (`noumeno_backend`,
+`ner_backend`, `scope_backend`, `judge_backend`, each defaulting to `gen_backend`); a
+two-tier judge (`judge_fast_backend` screens every attempt, and only what it does not approve
+goes to the strong judge); the correction budget `max_corrections` (EGO attempts per turn, default 2; a non-zero
+`ctx.metadata["plan_limits"]["max_self_corrections"]` overrides it for that turn; never below 1);
+an `escalate` policy consulted for the EGO's backend after the ID; the PII-block reply `block_message`; and
+`tool_result_limit`. The table is in `docs/HOST_INTEGRATION.md` §1.
 
 ## Multi-turn sessions
 
@@ -195,9 +206,9 @@ never claim the turn carried text nobody put in it.
 
 ## Token accounting
 
-Every LLM call a turn makes — NOUMENO, NER, the scope guard, **each** judge
-attempt, **each** EGO attempt of the correction loop, and the voice — lands on the
-returned `ctx`. soma drops nothing; read the totals and feed your meter:
+Every LLM call a turn makes — NOUMENO, NER, the scope guard (and its option selector, when it
+ran), **each** judge attempt, **each** EGO attempt of the correction loop, and the voice — lands
+on the returned `ctx`. soma drops nothing; read the totals and feed your meter:
 
 ```python
 ctx.total_tokens            # LLM + embedding tokens for the whole turn
@@ -235,13 +246,38 @@ you can assemble a body of your own.
 pip install -e ".[dev]"
 pytest tests/unit -q            # fast, no network (fake stages)
 pytest tests/integration -q     # real stages over Ollama, auto-skips if absent
-ruff check cogno_soma tests && mypy cogno_soma
+ruff check cogno_soma tests examples && mypy cogno_soma
 ```
+
+CI (`.github/workflows/ci.yml`) runs the lint, the type check and `tests/unit` with a coverage
+floor of 90% on every push to `main` and every pull request; the integration suite runs only in the nightly
+(and manually dispatched) job, which installs Ollama and pulls `mistral:latest` and
+`nomic-embed-text:latest`, the two models `tests/integration/test_e2e_live.py` asks for at
+`localhost:11434`.
 
 `tests/unit` refuses Ollama by construction: `tests/unit/conftest.py` installs
 `tests/unit/_ollama_gate.py` for the whole session, so a unit test that tries to open a connection
 to Ollama (port 11434, or the host:port of `OLLAMA_BASE_URL`/`COGNO_OLLAMA_URL`/`OLLAMA_HOST`)
 raises `OllamaGateError` and FAILS — even when the code under test swallowed the refusal. The
 local Ollama is the GPU serving live traffic; inject a stub (`tests/conftest.py`) (#58).
+
+## Environment
+
+The library reads **no** environment variable (no `os.environ` or `getenv` under `cogno_soma/`).
+The tests read three, all in `tests/unit/_ollama_gate.py`, only to know which address to refuse:
+`OLLAMA_BASE_URL`, `COGNO_OLLAMA_URL` and `OLLAMA_HOST`. The nightly CI job sets
+`COGNO_OLLAMA_TIMEOUT=600`, which `cogno-synapse` reads.
+
+## Documentation
+
+| file | what it is |
+|---|---|
+| [`README.md`](README.md) | this page |
+| [`docs/BUILD_YOUR_OWN_HOST.md`](docs/BUILD_YOUR_OWN_HOST.md) | from zero to a running agent with only the open-source libraries |
+| [`docs/HOST_INTEGRATION.md`](docs/HOST_INTEGRATION.md) | every seam a host wires: what you inject, sessions, hooks, the per-attempt ledger, held proposals, the extra executor pass, tokens, stage overrides |
+| [`LOGGING.md`](LOGGING.md) | every log line the library emits, held to the code by a test |
+| [`CHANGELOG.md`](CHANGELOG.md) | release notes |
+| [`examples/host_min.py`](examples/host_min.py) | the orchestration shape with fake stages, no network |
+| [`examples/host_real.py`](examples/host_real.py) | a real host over a local Ollama with one in-memory tool |
 
 Apache-2.0.

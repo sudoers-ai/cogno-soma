@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+Documentation only — no code, test or packaging change.
+
+- `README.md`: the install note said the sibling libraries are not on PyPI; they are, at older
+  releases than this tree needs (`cogno-anima>=0.1.9`), so the chain still comes from git. The
+  development commands lint `examples` too, as CI does. New: one paragraph on the rest of
+  `TurnConfig` (per-stage backends, the two-tier judge, the correction budget and its
+  `plan_limits` override, `escalate`, `block_message`), what CI runs, the environment (the library
+  reads none) and an index of every document. The token list names the option selector.
+- `docs/HOST_INTEGRATION.md`: §1 gains the `TurnConfig` fields it did not list
+  (`noumeno_backend`, `ner_backend`, `scope_backend`, `judge_backend`, `judge_fast_backend`,
+  `max_corrections`, `escalate`, `hooks`, `noumeno_result`/`intent_result`); §3 gains
+  `after_ego_attempt` and the fire order; §4's `stop_reason` list gains `judge_exhausted` and
+  `needs_clarification`, which the loop sets; §4.3 names `max_corrections` beside the
+  `plan_limits` key.
+- `LOGGING.md`: "each module" takes a logger — one module does.
+- This file: the section that was still titled "Unreleased" below 0.1.1 is part of 0.1.1, and is
+  retitled so.
+
 ## 0.1.5 — 2026-10-21 — `after_ego_attempt`: the seam between the executor and the judge, once per attempt
 
 ### Added
@@ -219,9 +239,10 @@ and was never given a number of its own.
     `after_id`) ends the turn before this clearing, for all three keys.
   - `tests/unit/test_the_guards_per_turn_keys_are_cleared.py`.
 
-## Unreleased
+## Part of 0.1.1 — entries from 2026-09-24 to 2026-10-07
 
-Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
+This section was titled "Unreleased" until 0.1.1 was cut on top of it; everything in it is in
+0.1.1. Entries here start on 2026-09-24. Earlier changes since 0.1.0 are in the git history only.
 
 ### Added
 
