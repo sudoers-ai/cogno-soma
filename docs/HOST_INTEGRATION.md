@@ -17,6 +17,12 @@ the seams a host wires up.
 | `block_message` | `TurnConfig` | PII-CRITICAL block reply, in your tenant's language; unset → the core's English fallback reaches the contact. Keep it a static constant — it is the only outgoing message that never passes the outgoing-PII detector (the blocked branch returns before `voice()`). |
 | `scope_selector_backend` / `scope_options` | `TurnConfig` | optional, per turn, and BOTH or nothing. On a turn the scope guard BLOCKED, the backend is asked which of the host's CLOSED options (the section titles this reader may read + the capability names on the turn's table) the message is about (`cogno_anima.stages.scope_options`). A `covered` pick (the very thing asked) means the refusal was FALSE: the turn goes on as if the guard had allowed it — a false refusal is never answered with a question. Anything else keeps the refusal byte for byte; the record on `ctx.metadata[mk.SCOPE_OPTIONS_SELECTION]` (popped at the start of every turn) is what you read to render a `suggested` one as your closed question. Unset → the selector is never called. |
 | `tool_result_limit` | `TurnConfig` | optional `Callable[[str], int]` — how many characters of ONE tool's result survive into the per-attempt judge ledger, per tool NAME. See **§4.1** below: if you persist that ledger and re-cut it, pass the SAME function you re-cut it with. |
+| `noumeno_backend` / `ner_backend` / `scope_backend` / `judge_backend` | `TurnConfig` | optional, one model per JSON stage; each unset one falls back to `gen_backend`. |
+| `judge_fast_backend` | `TurnConfig` | optional two-tier judge: this backend reads every attempt first, a fast approval is final, and anything else (a rejection, a verdict it could not read) is judged again by `judge_backend` (or `gen_backend`), whose verdict decides. Unset, or the same object as the strong judge → one tier. |
+| `max_corrections` | `TurnConfig` | how many EGO attempts the correction loop may make, default 2 (one correction). A non-zero `ctx.metadata["plan_limits"]["max_self_corrections"]` replaces it for that turn; the value is never below 1. §4.3 is the one exception that adds a pass. |
+| `escalate` | `TurnConfig` | optional `Callable[[ctx, stage], LLMBackend \| None]`, consulted with `"ego"` before each EGO attempt, after the ID has set the complexity: return a stronger backend for that attempt, or `None` to keep `ego_backend`. The ladder is your policy. |
+| `hooks` | `TurnConfig` | optional `Hooks` (§3). |
+| `noumeno_result` / `intent_result` | `TurnConfig` | optional, PER TURN: a precomputed perception the pipeline seats instead of running that stage (no backend, no embedder, no tokens). The turn the agent opens is the one use this library ships (`opening_perception()`, README). |
 
 soma does **not** select the persona. Resolve it at the host (e.g. with
 [`cogno-persona`](https://github.com/sudoers-ai/cogno-persona)'s `PersonaSelector`)
@@ -105,6 +111,12 @@ what a model reads on every turn, so switch it on a measurement
   the route.
 - **atomicity** — `on_rollback` (fires before each EGO retry) and `on_commit` (fires
   once the judge approves) to manage your DB tx / write-behind buffer / outbox.
+- **correcting an attempt before it is judged** — `after_ego_attempt`, after every executor
+  pass and before its judgement (§4.2).
+
+Fire order: `before_turn` → NOUMENO → `after_noumeno` → NER → `after_ner` → ID → `after_id` →
+gates → EGO⇄SUPEREGO (`after_ego_attempt` per pass, `on_rollback` per retry, `on_commit` on
+approval) → `after_ego` → voice → `after_superego` → `after_turn`.
 
 ```python
 raise StopPipeline(reason="pii_blocked", response=refusal, blocked=True)
@@ -117,8 +129,12 @@ raise StopPipeline(reason="pii_blocked", response=refusal, blocked=True)
 After a turn, inspect `ctx`:
 
 - `ctx.superego_result.response` — the final reply to send (None on a pure handoff).
-- `ctx.stop_reason` — `completed | human_handoff | scope_blocked | pii_blocked` (+
-  any reason your hooks set).
+- `ctx.stop_reason` — `completed | pii_blocked | scope_blocked | judge_exhausted |
+  human_handoff | needs_clarification` (+ any reason your hooks set). `judge_exhausted`: the
+  budget ran out with nothing written for the contact (`wrote_for_the_contact`), and the voice
+  still writes a reply. `human_handoff`: the budget ran out over an execution that DID write
+  something for the contact, `needs_handoff` is set, and the turn ends without a voiced reply. `needs_clarification`: a completed ACTION turn that wrote nothing,
+  held nothing, and whose reply asks the contact something (`LOGGING.md` lists the same five).
 - `ctx.needs_handoff` — escalate to a human (you own the actual handoff: queue,
   notify, etc.).
 - `ctx.id_result.triad_route` / `ctx.id_result.blocked` — routing + PII gate.
@@ -316,7 +332,7 @@ and `arguments` only, so the stamp never reaches the tool.
 
 ### 4.3 One more executor pass when the budget is spent
 
-With a budget of one attempt (`plan_limits.max_self_corrections = 1`), a rejected attempt normally
+With a budget of one attempt (`max_corrections = 1`, or `ctx.metadata["plan_limits"]["max_self_corrections"] = 1`, §1), a rejected attempt normally
 goes straight to the voice with the critique. Three rejections cannot be answered by
 re-voicing, because what is missing is a tool call (or a tool ARGUMENT) and only the EGO writes
 those. Each one buys ONE more EGO pass, under the same ceiling (`_ACTION_RETRY_CEILING`, two

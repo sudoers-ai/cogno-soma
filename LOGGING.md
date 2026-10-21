@@ -2,9 +2,9 @@
 
 This library follows the Cogno house rule: **libraries emit, the host configures.**
 
-- Each module does `logger = logging.getLogger(__name__)` and emits lazy
-  `key=value` messages. The library installs **no** handlers/formatters and never
-  calls `basicConfig`.
+- The one module that logs, `cogno_soma.pipeline`, takes its logger from
+  `logging.getLogger(__name__)` and emits lazy `key=value` messages. The library installs
+  **no** handlers/formatters and never calls `basicConfig`.
 - The host attaches its handler and sets the level per package, e.g.
   `logging.getLogger("cogno_soma").setLevel(logging.INFO)`.
 
