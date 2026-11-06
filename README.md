@@ -35,11 +35,11 @@ python examples/secretary_demo.py --trace     # full install chain in the praxis
 pip install cogno-soma          # pulls cogno-anima + cogno-synapse
 ```
 
-> PyPI carries older releases than this tree needs: on 2026-10-21 it had `cogno-soma` 0.1.0
-> and `cogno-anima` 0.1.0, while this tree (0.1.5) requires `cogno-anima>=0.1.9`
-> (`pyproject.toml`). Install the chain from git first, at the SHAs CI pins
-> (`cogno-homeo`, then `cogno-synapse`, then `cogno-engram`, then `cogno-anima`); see
-> `.github/workflows/ci.yml`. `cogno-engram` is in the chain because the anima's "did you mean…?"
+> On 2026-11-06 PyPI has this tree's release (`cogno-soma` 0.1.5) and `cogno-anima` 0.1.14,
+> which satisfies `cogno-anima>=0.1.9` (`pyproject.toml`). The chain CI tests is the git one, at
+> the SHAs it pins (`cogno-homeo`, then `cogno-synapse`, then `cogno-engram`, then
+> `cogno-anima`; see `.github/workflows/ci.yml`), and `cogno-engram` on PyPI (0.1.1, July) is
+> older than that pin. `cogno-engram` is in the chain because the anima's "did you mean…?"
 > selector reads its tokenizer, and fails closed without it (#57).
 
 ## Quick start — one turn
@@ -223,7 +223,12 @@ soma preserves the counts but does not price them — metering is the host's
 
 Persona selection, metering/billing, the DB/MCP execution behind the dispatcher,
 RBAC, retrieval, the real human handoff and semantic cache — soma **signals**
-(`stop_reason`, `needs_handoff`), the host **decides**. See `docs/HOST_INTEGRATION.md`.
+(`stop_reason`, `needs_handoff`), the host **decides**. The host also persists the
+`SessionRunner` state and decides which conversation a message belongs to; soma carries
+the state and runs the correction loop with the budget the host sets
+(`TurnConfig.max_corrections`). See `docs/HOST_INTEGRATION.md`; the map of the whole
+ecosystem — which repository owns each concern — is
+[`cogno-anima/docs/ARCHITECTURE.md`](https://github.com/sudoers-ai/cogno-anima/blob/main/docs/ARCHITECTURE.md).
 
 ## The Cogno ecosystem
 
