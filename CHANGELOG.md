@@ -4,6 +4,12 @@
 
 Documentation only — no code, test or packaging change.
 
+- `README.md`: the install note said PyPI carried only 0.1.0 of soma and anima; on 2026-11-06
+  it has soma 0.1.5 (this tree) and anima 0.1.14, and `cogno-engram` 0.1.1, older than the
+  pin CI tests. «What stays at the host» now says who carries and who persists the session
+  state and who sets the correction budget, and links the ecosystem map
+  (`cogno-anima/docs/ARCHITECTURE.md`).
+
 - `README.md`: the install note said the sibling libraries are not on PyPI; they are, at older
   releases than this tree needs (`cogno-anima>=0.1.9`), so the chain still comes from git. The
   development commands lint `examples` too, as CI does. New: one paragraph on the rest of
